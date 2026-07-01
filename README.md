@@ -1,16 +1,23 @@
-# 🚣 Rowing Program — Member Roster Dashboard
+# 🚣 Rowing Program — Roller Data API Relay
 
-A live roster and attendance dashboard that pulls active memberships, member info, and signed waivers from your **Roller** account.
+A thin JSON API in front of your **Roller** account's Data API. It handles the OAuth2
+client-credentials handshake and exposes clean, already-authenticated JSON endpoints —
+built so **Power BI** can pull the roster and waiver data with a plain Web connector,
+no OAuth logic needed on the Power BI side, and your Roller credentials never leave
+this server's environment variables.
 
 ---
 
 ## What It Does
 
-- **Roster** — searchable, sortable table or card grid of all active members
-- **Attendance** — check members in for a session with one click; exports to CSV automatically
-- **Waivers** — see who has signed a liability or registration waiver
-- **Stats bar** — live counts of active members, total members, and signed waivers
-- **Demo mode** — works out of the box with sample data even before you connect Roller
+- Authenticates with Roller's Data API (OAuth2 client-credentials flow)
+- Filters memberships down to your rowing program's PLU codes
+- Applies semester-based active status: **Spring** (Jan–Jun), **Fall** (Aug–Dec),
+  **Full Year** (Aug–Jun) — overriding Roller's own status field where a season is named
+  in the membership name; non-seasonal memberships (drop-ins, summer intensives) keep
+  Roller's own status
+- Resolves parent/guardian info on minors' waivers
+- Serves it all as plain JSON, ready for Power BI's Web connector
 
 ---
 
@@ -18,33 +25,33 @@ A live roster and attendance dashboard that pulls active memberships, member inf
 
 | File | What it is |
 |------|-----------|
-| `dashboard.html` | Open this in any browser — the full UI |
-| `server.py` | Python backend that authenticates with Roller and serves data |
+| `server.py` | Python/Flask backend — the whole thing |
 | `.env.example` | Template for your API credentials |
+| `render.yaml` | Render.com deployment config |
+| `requirements.txt` | Python dependencies |
 | `README.md` | This guide |
 
 ---
 
 ## Quick Start
 
-### Step 1 — Get your Roller API credentials
+### Step 1 — Get your Roller Data API credentials
 
 1. Log into Roller Venue Manager
 2. Go to **Settings → Integrations → API Keys**
-3. Click **Create client key**
-4. Choose **API Key** type, name it (e.g. "Roster Dashboard"), and generate
-5. Copy your **Client ID**, **Client Secret**, and note your **Venue ID**
-   (your Venue ID is the numeric ID in your Roller URL, or ask Roller support)
+3. Click **Create client key** — make sure it's scoped for the **Data API** (not the REST/booking API)
+4. Copy your **Client ID** and **Client Secret**
+5. Find your **Venue ID** under **Settings → Account → Venue settings**, or ask Roller support if it's not visible
 
-### Step 2 — Set up the backend
+### Step 2 — Configure and run
 
 ```bash
 # Install dependencies (one time)
-pip install flask flask-cors requests python-dotenv
+pip install -r requirements.txt
 
 # Copy and fill in credentials
 cp .env.example .env
-# Then open .env and paste in your Client ID, Client Secret, and Venue ID
+# Open .env and paste in your Client ID, Client Secret, Venue ID, and set DEMO_MODE=false
 
 # Run the server
 python server.py
@@ -52,51 +59,55 @@ python server.py
 
 You should see:
 ```
-🚣 Rowing Roster Dashboard — Backend Server
-=============================================
-  Venue ID : 12345
-  Client ID: abc123...
-
-  Dashboard: open dashboard.html in your browser
-  API base : http://localhost:5050/api/
+🚣  Rowing Roster Data API — LIVE (Venue: 12345)
+    URL: http://localhost:5050/api/members
 ```
 
-### Step 3 — Open the dashboard
+### Step 3 — Deploy to Render (for Power BI to reach it)
 
-Just open `dashboard.html` in your browser (double-click it). It will automatically connect to your local server.
+Push this repo to GitHub, connect it on [Render.com](https://render.com) as a Web Service,
+then add `ROLLER_CLIENT_ID`, `ROLLER_CLIENT_SECRET`, `ROLLER_VENUE_ID` as environment
+variables and set `DEMO_MODE=false`. You'll get a public URL like
+`https://rowing-roster.onrender.com`.
 
-> **No server running?** The dashboard falls back to demo mode with sample data so you can still see how it looks.
+### Step 4 — Connect from Power BI
+
+1. In Power BI Desktop: **Get Data → Web**
+2. Paste `https://rowing-roster.onrender.com/api/members?status=all`
+3. Power Query loads the JSON — expand the `data` column into a table
+4. Repeat with `/api/waivers` for waiver info, and join on `memberId` / `customerId` if needed
+5. Build your visuals, then **Publish** to Power BI Service and share the report link with coaches
 
 ---
 
-## API Endpoints (what server.py exposes)
+## API Endpoints
 
 | Endpoint | What it returns |
 |----------|----------------|
 | `GET /api/summary` | Quick counts: active members, total, waiver count |
-| `GET /api/members?status=active` | Full member roster (active / inactive / all) |
-| `GET /api/waivers` | All signed waivers |
+| `GET /api/members?status=active` | Full member roster (`active` / `inactive` / `all`), each with `status` (effective), `rollerStatus` (raw), and `scheduleWindow` |
+| `GET /api/waivers` | All signed waivers, with parent/guardian info resolved for minors |
 | `GET /api/waiver-forms` | Waiver form definitions/templates |
 | `GET /api/membership-redemptions` | Check-in/redemption history |
-| `GET /api/health` | Sanity check — returns `{"status": "ok"}` |
+| `GET /api/health` | Sanity check — mode, venue, PLU filter |
 
 ---
 
-## Attendance Workflow
+## Membership Active-Status Logic
 
-1. Click **Start Attendance** in the toolbar
-2. Name the session (e.g. "Morning Practice — July 1")
-3. Check the box next to each member as they arrive
-4. Click **Save Session** — a CSV is downloaded and the session is logged in the **Attendance Log** tab
+A membership's `status` field is not just Roller's raw status — it's computed from the
+membership name:
 
----
+- Name contains **"spring"** → active only Jan 1 – Jun 30 of that year
+- Name contains **"fall"** → active only Aug 1 – Dec 31 of that year
+- Name contains **"full year"** / **"annual"** / **"full season"** → active only Aug 1 – Jun 30 (crosses the year boundary)
+- No season keyword → falls back to whatever Roller's own status says
 
-## Filtering & Search
+The year is read from a 4-digit year in the membership name if present (e.g. "Full Year
+2025-2026"), otherwise from the membership's start date.
 
-- **Search bar** — filter by name or email instantly
-- **Active / Inactive / All** buttons — switch membership status view
-- **Waiver Status** button — cycle through All → Has Waiver → No Waiver
-- **Column headers** — click to sort by that column
+Each roster entry also includes `rollerStatus` (Roller's raw value) and `scheduleWindow`
+(the computed date range) so you can see why a member was marked active/inactive.
 
 ---
 
@@ -110,14 +121,14 @@ Just open `dashboard.html` in your browser (double-click it). It will automatica
 
 ## Troubleshooting
 
-**Dashboard shows demo data only**
-→ Make sure `server.py` is running and you can reach `http://localhost:5050/api/health` in your browser.
-
 **"401 Unauthorized" errors in server logs**
-→ Double-check your Client ID and Secret in `.env`. Credentials are tied to a specific venue.
+→ Double-check your Client ID and Secret in `.env`/Render env vars, and confirm the key was created for the **Data API**, not the REST API.
 
 **Members missing or wrong count**
 → The Data API paginates at 500 records per page. If you have more than 500 members, ask for pagination support to be added.
 
-**CORS error in browser console**
-→ Ensure you're opening `dashboard.html` as a file (not from another web server), or add your server's origin to the CORS config in `server.py`.
+**Roster is empty even though Roller shows active memberships**
+→ Likely a PLU field mismatch. Check `/api/health` — it lists the PLU codes being filtered. The server checks `plu`, `productCode`, `sku`, `productPlu`, `externalId`, and `barcode` on each membership record; if Roller uses a different field name, none will match.
+
+**Power BI shows a CORS or gateway error**
+→ Power BI Desktop's Web connector calls happen server-side (not from a browser), so CORS isn't usually the issue — check the URL is reachable and returns valid JSON first (open it directly in a browser).

@@ -1,14 +1,15 @@
 """
-Rowing Program Roster Dashboard — Roller API Backend
-=====================================================
-LOCAL:  python server.py  →  open http://localhost:5050
-CLOUD:  Deploy to Render (see README). The dashboard HTML is served
-        directly from this server so coaches just bookmark one URL.
+Rowing Program Roster Data API — Roller relay for Power BI
+===========================================================
+A thin JSON API in front of ROLLER's Data API. It handles the OAuth2
+client-credentials flow (painful to reimplement in Power Query/M) and
+exposes clean JSON endpoints that Power BI's Web connector can read
+directly, with no auth logic needed on the Power BI side.
 
-DEMO MODE (no Roller credentials needed):
-  Set DEMO_MODE=true in your .env or Render environment variables.
-  Returns realistic sample data so coaches can test the full UI
-  without touching your live Roller account.
+LOCAL:  python server.py  →  http://localhost:5050/api/members
+CLOUD:  Deployed on Render (see README).
+
+Endpoints: /api/members, /api/waivers, /api/summary, /api/health
 
 Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
 """
@@ -19,13 +20,13 @@ import time
 import requests
 from datetime import datetime, timezone, date
 from functools import wraps
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__, static_folder="static")
+app = Flask(__name__)
 CORS(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,14 +220,6 @@ def handle_errors(f):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     return wrapper
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Serve dashboard HTML
-# ─────────────────────────────────────────────────────────────────────────────
-@app.route("/")
-def index():
-    return send_file("dashboard.html")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -456,6 +449,6 @@ def get_config():
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     mode = "DEMO MODE (no Roller API calls)" if DEMO_MODE else f"LIVE (Venue: {ROLLER_VENUE_ID})"
-    print(f"\n🚣  Rowing Roster Dashboard — {mode}")
-    print(f"    URL: http://localhost:{PORT}\n")
+    print(f"\n🚣  Rowing Roster Data API — {mode}")
+    print(f"    URL: http://localhost:{PORT}/api/members\n")
     app.run(host="0.0.0.0", port=PORT, debug=False)

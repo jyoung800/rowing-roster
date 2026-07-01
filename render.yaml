@@ -18,6 +18,6 @@ services:
       - key: ROLLER_VENUE_ID
         sync: false          # set this in the Render dashboard
       - key: DEMO_MODE
-        value: "true"          # flip to "false" when you add your Roller credentials
+        value: "false"
       - key: MEMBERSHIP_PLUS
         value: "8565,8572,8573,8574,8575,8579,9528,9529,9530,9531,9547,9548,9549,9550"
