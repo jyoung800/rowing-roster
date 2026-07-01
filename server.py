@@ -14,9 +14,10 @@ Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
 """
 
 import os
+import re
 import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from functools import wraps
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
@@ -48,26 +49,26 @@ ROLLER_DATA_API  = "https://data.roller.app"
 # Demo data — realistic sample roster for testing
 # ─────────────────────────────────────────────────────────────────────────────
 DEMO_MEMBERS_DATA = [
-    {"memberId":"1001","firstName":"Alex",    "lastName":"Chen",      "fullName":"Alex Chen",       "email":"alex.chen@email.com",    "phone":"555-234-5678","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-03","endDate":"2026-12-31","plu":"8565"},
-    {"memberId":"1002","firstName":"Jordan",  "lastName":"Rivera",    "fullName":"Jordan Rivera",   "email":"j.rivera@email.com",     "phone":"555-345-6789","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-09-15","plu":"8572"},
-    {"memberId":"1003","firstName":"Sam",     "lastName":"Okonkwo",   "fullName":"Sam Okonkwo",     "email":"sam.o@email.com",        "phone":"555-456-7890","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
-    {"memberId":"1004","firstName":"Morgan",  "lastName":"Walsh",     "fullName":"Morgan Walsh",    "email":"morgan.w@email.com",     "phone":"555-567-8901","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-12-31","plu":"8565"},
-    {"memberId":"1005","firstName":"Taylor",  "lastName":"Kim",       "fullName":"Taylor Kim",      "email":"taylor.k@email.com",     "phone":"555-678-9012","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-10","endDate":"2027-01-15","plu":"8574"},
-    {"memberId":"1006","firstName":"Casey",   "lastName":"Patel",     "fullName":"Casey Patel",     "email":"casey.p@email.com",      "phone":"555-789-0123","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-01","plu":"8572"},
-    {"memberId":"1007","firstName":"Jamie",   "lastName":"Thompson",  "fullName":"Jamie Thompson",  "email":"jamie.t@email.com",      "phone":"555-890-1234","membershipName":"Youth Program",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-01","endDate":"2026-08-31","plu":"8573"},
-    {"memberId":"1008","firstName":"Riley",   "lastName":"Anderson",  "fullName":"Riley Anderson",  "email":"riley.a@email.com",      "phone":"555-901-2345","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-12","endDate":"2027-02-28","plu":"8574"},
-    {"memberId":"1009","firstName":"Drew",    "lastName":"Garcia",    "fullName":"Drew Garcia",     "email":"drew.g@email.com",       "phone":"555-012-3456","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-12-31","plu":"8565"},
-    {"memberId":"1010","firstName":"Avery",   "lastName":"Martinez",  "fullName":"Avery Martinez",  "email":"avery.m@email.com",      "phone":"555-123-4568","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-15","endDate":"2026-11-30","plu":"8572"},
-    {"memberId":"1011","firstName":"Quinn",   "lastName":"Johnson",   "fullName":"Quinn Johnson",   "email":"quinn.j@email.com",      "phone":"555-234-5679","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-08","endDate":"2026-12-31","plu":"8565"},
-    {"memberId":"1012","firstName":"Parker",  "lastName":"Lee",       "fullName":"Parker Lee",      "email":"parker.l@email.com",     "phone":"555-345-6780","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
-    {"memberId":"1013","firstName":"Reese",   "lastName":"Wilson",    "fullName":"Reese Wilson",    "email":"reese.w@email.com",      "phone":"555-456-7891","membershipName":"Masters Rower",      "status":"inactive","hasWaiver":True, "waiverDate":"2025-01-20","endDate":"2025-12-01","plu":"8574"},
-    {"memberId":"1014","firstName":"Skylar",  "lastName":"Brown",     "fullName":"Skylar Brown",    "email":"skylar.b@email.com",     "phone":"555-567-8902","membershipName":"Recreational Rower", "status":"inactive","hasWaiver":False,"waiverDate":None,        "endDate":"2025-11-15","plu":"8572"},
-    {"memberId":"1015","firstName":"Cameron", "lastName":"Davis",     "fullName":"Cameron Davis",   "email":"cam.d@email.com",        "phone":"555-678-9013","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-20","endDate":"2026-12-31","plu":"8565"},
-    {"memberId":"1016","firstName":"Rowan",   "lastName":"Foster",    "fullName":"Rowan Foster",    "email":"rowan.f@email.com",      "phone":"555-789-0124","membershipName":"Youth Program",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-10","endDate":"2026-08-31","plu":"8573"},
-    {"memberId":"1017","firstName":"Peyton",  "lastName":"Hughes",    "fullName":"Peyton Hughes",   "email":"peyton.h@email.com",     "phone":"555-890-1235","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-25","endDate":"2027-01-31","plu":"8574"},
-    {"memberId":"1018","firstName":"Sage",    "lastName":"Nguyen",    "fullName":"Sage Nguyen",     "email":"sage.n@email.com",       "phone":"555-901-2346","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-15","plu":"8572"},
-    {"memberId":"1019","firstName":"Blake",   "lastName":"Ortiz",     "fullName":"Blake Ortiz",     "email":"blake.o@email.com",      "phone":"555-012-3457","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-30","endDate":"2026-12-31","plu":"8579"},
-    {"memberId":"1020","firstName":"Dakota",  "lastName":"Price",     "fullName":"Dakota Price",    "email":"dakota.p@email.com",     "phone":"555-123-4569","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1001","firstName":"Alex",    "lastName":"Chen",      "fullName":"Alex Chen",       "email":"alex.chen@email.com",    "phone":"555-234-5678","membershipName":"Competitive Rower — Full Year 2025-2026",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-03","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1002","firstName":"Jordan",  "lastName":"Rivera",    "fullName":"Jordan Rivera",   "email":"j.rivera@email.com",     "phone":"555-345-6789","membershipName":"Recreational Rower — Fall 2025 Semester", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-09-15","plu":"8572"},
+    {"memberId":"1003","firstName":"Sam",     "lastName":"Okonkwo",   "fullName":"Sam Okonkwo",     "email":"sam.o@email.com",        "phone":"555-456-7890","membershipName":"Youth Program — Spring 2026 Semester",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1004","firstName":"Morgan",  "lastName":"Walsh",     "fullName":"Morgan Walsh",    "email":"morgan.w@email.com",     "phone":"555-567-8901","membershipName":"Competitive Rower — Full Year 2025-2026",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1005","firstName":"Taylor",  "lastName":"Kim",       "fullName":"Taylor Kim",      "email":"taylor.k@email.com",     "phone":"555-678-9012","membershipName":"Masters Rower — Summer Intensive",          "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-10","endDate":"2027-01-15","plu":"8574"},
+    {"memberId":"1006","firstName":"Casey",   "lastName":"Patel",     "fullName":"Casey Patel",     "email":"casey.p@email.com",      "phone":"555-789-0123","membershipName":"Recreational Rower — Fall 2025 Semester", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-01","plu":"8572"},
+    {"memberId":"1007","firstName":"Jamie",   "lastName":"Thompson",  "fullName":"Jamie Thompson",  "email":"jamie.t@email.com",      "phone":"555-890-1234","membershipName":"Youth Program — Spring 2026 Semester",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-01","endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1008","firstName":"Riley",   "lastName":"Anderson",  "fullName":"Riley Anderson",  "email":"riley.a@email.com",      "phone":"555-901-2345","membershipName":"Masters Rower — Full Year 2026-2027",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-12","endDate":"2027-02-28","plu":"8574"},
+    {"memberId":"1009","firstName":"Drew",    "lastName":"Garcia",    "fullName":"Drew Garcia",     "email":"drew.g@email.com",       "phone":"555-012-3456","membershipName":"Competitive Rower — Adult Drop-In Pass",   "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1010","firstName":"Avery",   "lastName":"Martinez",  "fullName":"Avery Martinez",  "email":"avery.m@email.com",      "phone":"555-123-4568","membershipName":"Recreational Rower — Fall 2025 Semester", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-15","endDate":"2026-11-30","plu":"8572"},
+    {"memberId":"1011","firstName":"Quinn",   "lastName":"Johnson",   "fullName":"Quinn Johnson",   "email":"quinn.j@email.com",      "phone":"555-234-5679","membershipName":"Competitive Rower — Full Year 2025-2026",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-08","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1012","firstName":"Parker",  "lastName":"Lee",       "fullName":"Parker Lee",      "email":"parker.l@email.com",     "phone":"555-345-6780","membershipName":"Youth Program — Spring 2026 Semester",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1013","firstName":"Reese",   "lastName":"Wilson",    "fullName":"Reese Wilson",    "email":"reese.w@email.com",      "phone":"555-456-7891","membershipName":"Masters Rower — Full Year 2024-2025",      "status":"inactive","hasWaiver":True, "waiverDate":"2025-01-20","endDate":"2025-12-01","plu":"8574"},
+    {"memberId":"1014","firstName":"Skylar",  "lastName":"Brown",     "fullName":"Skylar Brown",    "email":"skylar.b@email.com",     "phone":"555-567-8902","membershipName":"Recreational Rower — Fall 2024 Semester", "status":"inactive","hasWaiver":False,"waiverDate":None,        "endDate":"2025-11-15","plu":"8572"},
+    {"memberId":"1015","firstName":"Cameron", "lastName":"Davis",     "fullName":"Cameron Davis",   "email":"cam.d@email.com",        "phone":"555-678-9013","membershipName":"Competitive Rower — Full Year 2025-2026",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-20","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1016","firstName":"Rowan",   "lastName":"Foster",    "fullName":"Rowan Foster",    "email":"rowan.f@email.com",      "phone":"555-789-0124","membershipName":"Youth Program — Spring 2026 Semester",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-10","endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1017","firstName":"Peyton",  "lastName":"Hughes",    "fullName":"Peyton Hughes",   "email":"peyton.h@email.com",     "phone":"555-890-1235","membershipName":"Masters Rower — Summer Intensive",          "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-25","endDate":"2027-01-31","plu":"8574"},
+    {"memberId":"1018","firstName":"Sage",    "lastName":"Nguyen",    "fullName":"Sage Nguyen",     "email":"sage.n@email.com",       "phone":"555-901-2346","membershipName":"Recreational Rower — Fall 2025 Semester", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-15","plu":"8572"},
+    {"memberId":"1019","firstName":"Blake",   "lastName":"Ortiz",     "fullName":"Blake Ortiz",     "email":"blake.o@email.com",      "phone":"555-012-3457","membershipName":"Competitive Rower — Full Year 2025-2026",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-30","endDate":"2026-12-31","plu":"8579"},
+    {"memberId":"1020","firstName":"Dakota",  "lastName":"Price",     "fullName":"Dakota Price",    "email":"dakota.p@email.com",     "phone":"555-123-4569","membershipName":"Youth Program — Spring 2026 Semester",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
 ]
 
 DEMO_WAIVERS_DATA = [
@@ -85,6 +86,82 @@ DEMO_WAIVERS_DATA = [
     {"signedWaiverId":"w012","customerId":"1017","firstName":"Peyton",  "lastName":"Hughes",   "email":"peyton.h@email.com",    "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-25","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
     {"signedWaiverId":"w013","customerId":"1019","firstName":"Blake",   "lastName":"Ortiz",    "email":"blake.o@email.com",     "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-30","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Membership schedule rules
+#
+# Coaches don't just trust Roller's own "active" flag — a membership is only
+# actually active during the season it was sold for, regardless of what
+# Roller's status/end date say:
+#   - "Spring" memberships run Jan 1 – Jun 30
+#   - "Fall" memberships run Aug 1 – Dec 31
+#   - "Full Year" memberships run Aug 1 – Jun 30 (never July, win or lose)
+# Anything that doesn't mention a season (drop-in passes, summer intensives,
+# etc.) keeps whatever status Roller reports.
+# ─────────────────────────────────────────────────────────────────────────────
+FULL_YEAR_KEYWORDS = ("full year", "full-year", "full season", "annual", "year round", "year-round")
+SPRING_KEYWORDS    = ("spring",)
+FALL_KEYWORDS      = ("fall",)
+
+
+def _season_type(membership_name: str):
+    name = (membership_name or "").lower()
+    if any(k in name for k in FULL_YEAR_KEYWORDS):
+        return "full_year"
+    if any(k in name for k in SPRING_KEYWORDS):
+        return "spring"
+    if any(k in name for k in FALL_KEYWORDS):
+        return "fall"
+    return None
+
+
+def _extract_year(text: str):
+    match = re.search(r"20\d{2}", text or "")
+    return int(match.group()) if match else None
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def compute_schedule(membership_name: str, start_date_str, today: date):
+    """Returns None if the membership name has no season keyword (no override),
+    otherwise {"active": bool, "window": "Aug 01, 2025 - Jun 30, 2026"}."""
+    season = _season_type(membership_name)
+    if season is None:
+        return None
+
+    year = _extract_year(membership_name)
+    if year is None:
+        start_date = _parse_date(start_date_str)
+        year = start_date.year if start_date else today.year
+
+    if season == "spring":
+        window_start, window_end = date(year, 1, 1), date(year, 6, 30)
+    elif season == "fall":
+        window_start, window_end = date(year, 8, 1), date(year, 12, 31)
+    else:  # full_year — Aug of `year` through Jun of `year + 1`
+        window_start, window_end = date(year, 8, 1), date(year + 1, 6, 30)
+
+    return {
+        "active": window_start <= today <= window_end,
+        "window": f"{window_start.strftime('%b %d, %Y')} - {window_end.strftime('%b %d, %Y')}",
+    }
+
+
+def resolve_status(membership_name: str, start_date_str, roller_status: str, today: date | None = None):
+    """Returns (effective_status, schedule_window_or_None)."""
+    today = today or datetime.now(timezone.utc).date()
+    schedule = compute_schedule(membership_name, start_date_str, today)
+    if schedule is None:
+        return (roller_status or "").lower(), None
+    return ("active" if schedule["active"] else "inactive"), schedule["window"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,8 +249,13 @@ def health():
 @app.route("/api/summary")
 @handle_errors
 def get_summary():
+    today = datetime.now(timezone.utc).date()
+
     if DEMO_MODE:
-        active = sum(1 for m in DEMO_MEMBERS_DATA if m["status"] == "active")
+        active = sum(
+            1 for m in DEMO_MEMBERS_DATA
+            if resolve_status(m["membershipName"], m.get("startDate"), m["status"], today)[0] == "active"
+        )
         return jsonify({
             "activeMembers":   active,
             "inactiveMembers": len(DEMO_MEMBERS_DATA) - active,
@@ -187,7 +269,10 @@ def get_summary():
     if MEMBERSHIP_PLUS:
         memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
 
-    active       = sum(1 for m in memberships if m.get("status","").lower() == "active")
+    active = sum(
+        1 for m in memberships
+        if resolve_status(m.get("membershipName"), m.get("startDate"), m.get("status",""), today)[0] == "active"
+    )
     waiver_data  = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1})
     return jsonify({
         "activeMembers":   active,
@@ -206,11 +291,19 @@ def get_summary():
 def get_members():
     status_filter = request.args.get("status", "active").lower()
     search        = request.args.get("search", "").lower()
+    today         = datetime.now(timezone.utc).date()
 
     if DEMO_MODE:
-        roster = DEMO_MEMBERS_DATA if status_filter == "all" else [
-            m for m in DEMO_MEMBERS_DATA if m["status"] == status_filter
-        ]
+        roster = []
+        for m in DEMO_MEMBERS_DATA:
+            entry = dict(m)
+            effective_status, window = resolve_status(entry["membershipName"], entry.get("startDate"), entry["status"], today)
+            entry["rollerStatus"]   = entry["status"]
+            entry["status"]         = effective_status
+            entry["scheduleWindow"] = window
+            roster.append(entry)
+        if status_filter != "all":
+            roster = [m for m in roster if m["status"] == status_filter]
         if search:
             roster = [m for m in roster if search in m["fullName"].lower() or search in m["email"].lower()]
         roster = sorted(roster, key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
@@ -221,8 +314,6 @@ def get_members():
     memberships     = membership_data.get("data", [])
     if MEMBERSHIP_PLUS:
         memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
-    if status_filter != "all":
-        memberships = [m for m in memberships if m.get("status","").lower() == status_filter]
 
     customer_data = roller_get("/data/customers", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
     customer_map  = {str(c["customerId"]): c for c in customer_data.get("data", [])}
@@ -236,6 +327,7 @@ def get_members():
         full_name = f"{first} {last}".strip() or f"Member {cid}"
         if search and search not in full_name.lower() and search not in customer.get("email","").lower():
             continue
+        effective_status, window = resolve_status(m.get("membershipName"), m.get("startDate"), m.get("status",""), today)
         roster.append({
             "memberId":        cid,
             "firstName":       first,
@@ -246,7 +338,9 @@ def get_members():
             "dateOfBirth":     customer.get("dateOfBirth",""),
             "membershipName":  m.get("membershipName",""),
             "membershipType":  m.get("membershipType",""),
-            "status":          m.get("status",""),
+            "status":          effective_status,
+            "rollerStatus":    m.get("status",""),
+            "scheduleWindow":  window,
             "startDate":       m.get("startDate",""),
             "endDate":         m.get("endDate",""),
             "nextBillingDate": m.get("nextBillingDate",""),
@@ -254,6 +348,9 @@ def get_members():
             "hasWaiver":       False,
             "waiverDate":      None,
         })
+
+    if status_filter != "all":
+        roster = [m for m in roster if m["status"] == status_filter]
 
     try:
         waiver_data = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1000})

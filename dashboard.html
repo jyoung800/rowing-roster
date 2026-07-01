@@ -479,12 +479,45 @@ async function apiFetch(path) {
 }
 
 function useDemoData() {
-  allMembers = DEMO_MEMBERS;
+  allMembers = DEMO_MEMBERS.map(applyScheduleStatus);
   waiverData = DEMO_WAIVERS;
-  updateStats({ activeMembers:24, totalMembers:31, signedWaivers:19 });
-  document.getElementById('last-updated').textContent = '⚠️ Demo mode';
+  const active = allMembers.filter(m => m.status === 'active').length;
+  updateStats({ activeMembers: active, totalMembers: allMembers.length, signedWaivers: DEMO_WAIVERS.length });
+  document.getElementById('last-updated').textContent = '⚠️ Demo mode (offline)';
   applyFilters();
   renderWaivers();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Membership schedule rules (mirrors server.py resolve_status)
+//   Spring    → Jan 1 – Jun 30
+//   Fall      → Aug 1 – Dec 31
+//   Full Year → Aug 1 – Jun 30, regardless of Roller's own status
+// ─────────────────────────────────────────────────────────────
+function applyScheduleStatus(m) {
+  const entry = { ...m };
+  const name = (entry.membershipName || '').toLowerCase();
+  let season = null;
+  if (/full year|full-year|full season|annual|year round|year-round/.test(name)) season = 'full_year';
+  else if (/spring/.test(name)) season = 'spring';
+  else if (/fall/.test(name))   season = 'fall';
+
+  entry.rollerStatus = entry.status;
+  if (!season) { entry.scheduleWindow = null; return entry; }
+
+  const yearMatch = name.match(/20\d{2}/);
+  const year = yearMatch ? parseInt(yearMatch[0], 10) : new Date().getFullYear();
+
+  let start, end;
+  if (season === 'spring')      { start = new Date(year, 0, 1);  end = new Date(year, 5, 30); }
+  else if (season === 'fall')   { start = new Date(year, 7, 1);  end = new Date(year, 11, 31); }
+  else                          { start = new Date(year, 7, 1);  end = new Date(year + 1, 5, 30); }
+
+  const today = new Date();
+  entry.status = (today >= start && today <= end) ? 'active' : 'inactive';
+  const fmtDate = d => d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+  entry.scheduleWindow = `${fmtDate(start)} - ${fmtDate(end)}`;
+  return entry;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -587,7 +620,7 @@ function renderTable() {
         </div>
       </td>
       <td>${esc(m.membershipName||'—')}</td>
-      <td>${statusBadge(m.status)}</td>
+      <td>${statusBadge(m)}</td>
       <td>${waiverBadge(m)}</td>
       <td>${fmt(m.endDate)}</td>
       <td>${esc(m.phone||'—')}</td>
@@ -633,7 +666,7 @@ function renderGrid() {
         ${m.endDate ? `<div class="card-row">📅 Expires ${fmt(m.endDate)}</div>` : ''}
       </div>
       <div class="card-ftr">
-        <div class="card-badges">${statusBadge(m.status)} ${waiverBadge(m)}</div>
+        <div class="card-badges">${statusBadge(m)} ${waiverBadge(m)}</div>
         <label class="card-chk ${chked?'present':''}">
           <input type="checkbox" ${chked?'checked':''} ${dis}
             onchange="togglePresent('${m.memberId}',this.checked,this)"/>
@@ -844,10 +877,15 @@ function memberColor(s) {
   return pal[Math.abs(h) % pal.length];
 }
 
-function statusBadge(s) {
-  return s?.toLowerCase() === 'active'
-    ? '<span class="badge b-active">● Active</span>'
-    : '<span class="badge b-inactive">Inactive</span>';
+function statusBadge(m) {
+  const active = m.status?.toLowerCase() === 'active';
+  let title = '';
+  if (m.scheduleWindow) {
+    title = `title="Season window: ${esc(m.scheduleWindow)}${m.rollerStatus && m.rollerStatus.toLowerCase() !== m.status?.toLowerCase() ? ' (Roller says: ' + esc(m.rollerStatus) + ')' : ''}"`;
+  }
+  return active
+    ? `<span class="badge b-active" ${title}>● Active</span>`
+    : `<span class="badge b-inactive" ${title}>Inactive</span>`;
 }
 function waiverBadge(m) {
   return m.hasWaiver
@@ -859,20 +897,20 @@ function waiverBadge(m) {
 // Demo data
 // ─────────────────────────────────────────────────────────────
 const DEMO_MEMBERS = [
-  {memberId:'1001',firstName:'Alex',    lastName:'Chen',      fullName:'Alex Chen',      email:'alex.chen@email.com',     phone:'555-234-5678', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-03', endDate:'2026-12-31', plu:'4001'},
-  {memberId:'1002',firstName:'Jordan',  lastName:'Rivera',    fullName:'Jordan Rivera',  email:'j.rivera@email.com',      phone:'555-345-6789', membershipName:'Recreational Rower',status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-09-15', plu:'4002'},
-  {memberId:'1003',firstName:'Sam',     lastName:'Okonkwo',   fullName:'Sam Okonkwo',    email:'sam.o@email.com',         phone:'555-456-7890', membershipName:'Youth Program',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
-  {memberId:'1004',firstName:'Morgan',  lastName:'Walsh',     fullName:'Morgan Walsh',   email:'morgan.w@email.com',      phone:'555-567-8901', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-12-31', plu:'4001'},
-  {memberId:'1005',firstName:'Taylor',  lastName:'Kim',       fullName:'Taylor Kim',     email:'taylor.k@email.com',      phone:'555-678-9012', membershipName:'Masters Rower',     status:'active',   hasWaiver:true,  waiverDate:'2026-01-10', endDate:'2027-01-15', plu:'4004'},
-  {memberId:'1006',firstName:'Casey',   lastName:'Patel',     fullName:'Casey Patel',    email:'casey.p@email.com',       phone:'555-789-0123', membershipName:'Recreational Rower',status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-10-01', plu:'4002'},
-  {memberId:'1007',firstName:'Jamie',   lastName:'Thompson',  fullName:'Jamie Thompson', email:'jamie.t@email.com',       phone:'555-890-1234', membershipName:'Youth Program',     status:'active',   hasWaiver:true,  waiverDate:'2026-02-01', endDate:'2026-08-31', plu:'4003'},
-  {memberId:'1008',firstName:'Riley',   lastName:'Anderson',  fullName:'Riley Anderson', email:'riley.a@email.com',       phone:'555-901-2345', membershipName:'Masters Rower',     status:'active',   hasWaiver:true,  waiverDate:'2026-01-12', endDate:'2027-02-28', plu:'4004'},
-  {memberId:'1009',firstName:'Drew',    lastName:'Garcia',    fullName:'Drew Garcia',    email:'drew.g@email.com',        phone:'555-012-3456', membershipName:'Competitive Rower', status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-12-31', plu:'4001'},
-  {memberId:'1010',firstName:'Avery',   lastName:'Martinez',  fullName:'Avery Martinez', email:'avery.m@email.com',       phone:'555-123-4568', membershipName:'Recreational Rower',status:'active',   hasWaiver:true,  waiverDate:'2026-01-15', endDate:'2026-11-30', plu:'4002'},
-  {memberId:'1011',firstName:'Quinn',   lastName:'Johnson',   fullName:'Quinn Johnson',  email:'quinn.j@email.com',       phone:'555-234-5679', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-08', endDate:'2026-12-31', plu:'4001'},
-  {memberId:'1012',firstName:'Parker',  lastName:'Lee',       fullName:'Parker Lee',     email:'parker.l@email.com',      phone:'555-345-6780', membershipName:'Youth Program',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
-  {memberId:'1013',firstName:'Reese',   lastName:'Wilson',    fullName:'Reese Wilson',   email:'reese.w@email.com',       phone:'555-456-7891', membershipName:'Masters Rower',     status:'inactive', hasWaiver:true,  waiverDate:'2025-01-20', endDate:'2025-12-01', plu:'4004'},
-  {memberId:'1014',firstName:'Skylar',  lastName:'Brown',     fullName:'Skylar Brown',   email:'skylar.b@email.com',      phone:'555-567-8902', membershipName:'Recreational Rower',status:'inactive', hasWaiver:false, waiverDate:null,         endDate:'2025-11-15', plu:'4002'},
+  {memberId:'1001',firstName:'Alex',    lastName:'Chen',      fullName:'Alex Chen',      email:'alex.chen@email.com',     phone:'555-234-5678', membershipName:'Competitive Rower — Full Year 2025-2026', status:'active',   hasWaiver:true,  waiverDate:'2026-01-03', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1002',firstName:'Jordan',  lastName:'Rivera',    fullName:'Jordan Rivera',  email:'j.rivera@email.com',      phone:'555-345-6789', membershipName:'Recreational Rower — Fall 2025 Semester',status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-09-15', plu:'4002'},
+  {memberId:'1003',firstName:'Sam',     lastName:'Okonkwo',   fullName:'Sam Okonkwo',    email:'sam.o@email.com',         phone:'555-456-7890', membershipName:'Youth Program — Spring 2026 Semester',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1004',firstName:'Morgan',  lastName:'Walsh',     fullName:'Morgan Walsh',   email:'morgan.w@email.com',      phone:'555-567-8901', membershipName:'Competitive Rower — Full Year 2025-2026', status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1005',firstName:'Taylor',  lastName:'Kim',       fullName:'Taylor Kim',     email:'taylor.k@email.com',      phone:'555-678-9012', membershipName:'Masters Rower — Summer Intensive',         status:'active',   hasWaiver:true,  waiverDate:'2026-01-10', endDate:'2027-01-15', plu:'4004'},
+  {memberId:'1006',firstName:'Casey',   lastName:'Patel',     fullName:'Casey Patel',    email:'casey.p@email.com',       phone:'555-789-0123', membershipName:'Recreational Rower — Fall 2025 Semester',status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-10-01', plu:'4002'},
+  {memberId:'1007',firstName:'Jamie',   lastName:'Thompson',  fullName:'Jamie Thompson', email:'jamie.t@email.com',       phone:'555-890-1234', membershipName:'Youth Program — Spring 2026 Semester',     status:'active',   hasWaiver:true,  waiverDate:'2026-02-01', endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1008',firstName:'Riley',   lastName:'Anderson',  fullName:'Riley Anderson', email:'riley.a@email.com',       phone:'555-901-2345', membershipName:'Masters Rower — Full Year 2026-2027',      status:'active',   hasWaiver:true,  waiverDate:'2026-01-12', endDate:'2027-02-28', plu:'4004'},
+  {memberId:'1009',firstName:'Drew',    lastName:'Garcia',    fullName:'Drew Garcia',    email:'drew.g@email.com',        phone:'555-012-3456', membershipName:'Competitive Rower — Adult Drop-In Pass',   status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1010',firstName:'Avery',   lastName:'Martinez',  fullName:'Avery Martinez', email:'avery.m@email.com',       phone:'555-123-4568', membershipName:'Recreational Rower — Fall 2025 Semester',status:'active',   hasWaiver:true,  waiverDate:'2026-01-15', endDate:'2026-11-30', plu:'4002'},
+  {memberId:'1011',firstName:'Quinn',   lastName:'Johnson',   fullName:'Quinn Johnson',  email:'quinn.j@email.com',       phone:'555-234-5679', membershipName:'Competitive Rower — Full Year 2025-2026', status:'active',   hasWaiver:true,  waiverDate:'2026-01-08', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1012',firstName:'Parker',  lastName:'Lee',       fullName:'Parker Lee',     email:'parker.l@email.com',      phone:'555-345-6780', membershipName:'Youth Program — Spring 2026 Semester',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1013',firstName:'Reese',   lastName:'Wilson',    fullName:'Reese Wilson',   email:'reese.w@email.com',       phone:'555-456-7891', membershipName:'Masters Rower — Full Year 2024-2025',      status:'inactive', hasWaiver:true,  waiverDate:'2025-01-20', endDate:'2025-12-01', plu:'4004'},
+  {memberId:'1014',firstName:'Skylar',  lastName:'Brown',     fullName:'Skylar Brown',   email:'skylar.b@email.com',      phone:'555-567-8902', membershipName:'Recreational Rower — Fall 2024 Semester',status:'inactive', hasWaiver:false, waiverDate:null,         endDate:'2025-11-15', plu:'4002'},
 ];
 
 const DEMO_WAIVERS = [
