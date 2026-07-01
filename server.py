@@ -214,7 +214,8 @@ def handle_errors(f):
             return f(*args, **kwargs)
         except requests.HTTPError as e:
             code = e.response.status_code if e.response is not None else 502
-            return jsonify({"error": str(e), "status": code}), 502
+            body = e.response.text[:500] if e.response is not None else ""
+            return jsonify({"error": str(e), "roller_response": body, "status": code}), 502
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     return wrapper
