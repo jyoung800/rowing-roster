@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Rowing Program — Member Roster</title>
+<style>
+/* ── Reset ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --navy:  #0a1f3c;
+  --blue:  #1352a2;
+  --sky:   #2b80d6;
+  --light: #e8f1fc;
+  --teal:  #0e8a7b;
+  --green: #16a34a;
+  --red:   #c0392b;
+  --amber: #d97706;
+  --g50:   #f8fafc;
+  --g100:  #f1f5f9;
+  --g200:  #e2e8f0;
+  --g400:  #94a3b8;
+  --g600:  #475569;
+  --g800:  #1e293b;
+  --white: #ffffff;
+  --r:     10px;
+  --sh:    0 2px 12px rgba(0,0,0,.10);
+}
+html,body { height:100%; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--g50); color:var(--g800); }
+
+/* ── Top bar ─────────────────────────────────────────────── */
+header {
+  background:var(--navy); color:#fff;
+  padding:0 24px; height:60px;
+  display:flex; align-items:center; justify-content:space-between;
+  position:sticky; top:0; z-index:100;
+  box-shadow:0 2px 8px rgba(0,0,0,.3);
+}
+.hdr-l { display:flex; align-items:center; gap:12px; }
+.hdr-logo { font-size:26px; }
+.hdr-title h1 { font-size:17px; font-weight:700; }
+.hdr-title p  { font-size:11px; color:#8eadd4; margin-top:1px; }
+.hdr-r { display:flex; align-items:center; gap:8px; }
+#last-updated { font-size:11px; color:#8eadd4; }
+
+/* ── Stats bar ───────────────────────────────────────────── */
+.stats-bar {
+  background:var(--blue); padding:0 24px;
+  display:flex; gap:0; overflow-x:auto;
+}
+.stat { padding:12px 28px 12px 0; min-width:120px; border-right:1px solid rgba(255,255,255,.15); margin-right:28px; }
+.stat:last-child { border-right:none; }
+.stat-val { font-size:26px; font-weight:800; color:#fff; line-height:1; }
+.stat-lbl { font-size:11px; color:#b3ccf0; margin-top:2px; text-transform:uppercase; letter-spacing:.6px; }
+
+/* ── Tab row ─────────────────────────────────────────────── */
+.tab-row {
+  display:flex; background:var(--white);
+  border-bottom:2px solid var(--g200);
+  padding:0 24px;
+}
+.tab {
+  padding:12px 18px; font-size:14px; font-weight:600;
+  color:var(--g400); cursor:pointer;
+  border-bottom:2px solid transparent; margin-bottom:-2px;
+  transition:all .15s; white-space:nowrap;
+}
+.tab:hover  { color:var(--blue); }
+.tab.active { color:var(--blue); border-bottom-color:var(--blue); }
+
+/* ── Filter toolbar ──────────────────────────────────────── */
+#filter-toolbar {
+  padding:12px 24px;
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  background:var(--white); border-bottom:1px solid var(--g200);
+}
+.search-wrap { position:relative; flex:1; min-width:200px; }
+.search-wrap input {
+  width:100%; padding:8px 12px 8px 36px;
+  border:1px solid var(--g200); border-radius:var(--r);
+  font-size:14px; background:var(--g50); transition:border-color .15s;
+}
+.search-wrap input:focus { outline:none; border-color:var(--sky); background:#fff; }
+.search-icon { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--g400); pointer-events:none; }
+
+.filter-grp { display:flex; gap:5px; }
+.fbtn {
+  padding:7px 13px; border:1px solid var(--g200); border-radius:var(--r);
+  background:#fff; font-size:13px; cursor:pointer; color:var(--g600); font-weight:500;
+  transition:all .15s;
+}
+.fbtn:hover  { border-color:var(--sky); color:var(--sky); }
+.fbtn.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+
+.tbr-r { display:flex; gap:7px; margin-left:auto; }
+.btn {
+  padding:7px 14px; border-radius:var(--r); border:none;
+  font-size:13px; font-weight:600; cursor:pointer;
+  display:flex; align-items:center; gap:5px; transition:opacity .15s;
+}
+.btn:hover { opacity:.85; }
+.btn-primary   { background:var(--blue);  color:#fff; }
+.btn-success   { background:var(--green); color:#fff; }
+.btn-secondary { background:var(--g100);  color:var(--g600); border:1px solid var(--g200); }
+.btn-sm        { padding:5px 11px; font-size:12px; }
+
+.view-toggle { display:flex; border:1px solid var(--g200); border-radius:var(--r); overflow:hidden; }
+.vbtn { padding:7px 11px; border:none; background:#fff; cursor:pointer; color:var(--g400); font-size:15px; transition:all .15s; }
+.vbtn.active { background:var(--blue); color:#fff; }
+
+/* ── Attendance banner ───────────────────────────────────── */
+#attend-banner {
+  display:none;
+  background:#fef3c7; border-bottom:1px solid #fbbf24;
+  padding:9px 24px; align-items:center; gap:10px; flex-wrap:wrap;
+}
+#attend-banner.on { display:flex; }
+#attend-info { flex:1; font-size:13px; color:#92400e; font-weight:500; }
+#attend-count { font-weight:800; font-size:15px; }
+
+/* ── Main ────────────────────────────────────────────────── */
+.main { padding:18px 24px; }
+
+/* ── Panels ──────────────────────────────────────────────── */
+.panel { display:none; }
+.panel.active { display:block; }
+
+/* ── Table ───────────────────────────────────────────────── */
+.tbl-wrap { background:#fff; border-radius:var(--r); box-shadow:var(--sh); overflow:hidden; }
+table { width:100%; border-collapse:collapse; }
+thead tr { background:var(--g50); border-bottom:2px solid var(--g200); }
+th {
+  padding:10px 14px; text-align:left;
+  font-size:11px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.6px; color:var(--g400); white-space:nowrap;
+  cursor:pointer; user-select:none;
+}
+th:hover,th.sorted { color:var(--blue); }
+tbody tr { border-bottom:1px solid var(--g100); transition:background .1s; }
+tbody tr:hover { background:var(--light); }
+tbody tr:last-child { border-bottom:none; }
+td { padding:11px 14px; font-size:13.5px; vertical-align:middle; }
+
+.mem-cell { display:flex; align-items:center; gap:9px; }
+.avatar {
+  width:34px; height:34px; border-radius:50%;
+  color:#fff; font-size:12px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.mem-name  { font-weight:600; }
+.mem-email { font-size:11px; color:var(--g400); margin-top:1px; }
+
+.badge {
+  display:inline-flex; align-items:center; gap:3px;
+  padding:2px 8px; border-radius:20px;
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.3px;
+}
+.b-active   { background:#dcfce7; color:#166534; }
+.b-inactive { background:var(--g100); color:var(--g600); }
+.b-waiver   { background:#dbeafe; color:#1d4ed8; }
+.b-nowav    { background:#fef2f2; color:#991b1b; }
+.b-minor    { background:#fef9c3; color:#713f12; }
+
+.chk { width:18px; height:18px; cursor:pointer; accent-color:var(--blue); }
+.chk:disabled { opacity:.35; cursor:default; }
+td.tc { text-align:center; }
+
+/* ── Cards ───────────────────────────────────────────────── */
+.card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(255px,1fr)); gap:13px; }
+.card {
+  background:#fff; border-radius:var(--r); box-shadow:var(--sh); padding:16px;
+  display:flex; flex-direction:column; gap:9px;
+  transition:transform .15s, box-shadow .15s;
+}
+.card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.13); }
+.card-hdr { display:flex; align-items:center; gap:11px; }
+.card-av {
+  width:44px; height:44px; border-radius:50%;
+  color:#fff; font-size:15px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.card-name { font-size:15px; font-weight:700; }
+.card-sub  { font-size:12px; color:var(--g600); margin-top:2px; }
+.card-body { border-top:1px solid var(--g100); padding-top:9px; }
+.card-row  { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--g600); margin-bottom:4px; }
+.card-ftr  { display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--g100); padding-top:9px; }
+.card-badges { display:flex; gap:4px; flex-wrap:wrap; }
+.card-chk {
+  display:flex; align-items:center; gap:5px;
+  font-size:12px; color:var(--g600); cursor:pointer; user-select:none;
+}
+.card-chk input { accent-color:var(--blue); width:15px; height:15px; }
+.card-chk.present { color:var(--green); font-weight:700; }
+
+/* ── Empty / Loader ──────────────────────────────────────── */
+.empty { text-align:center; padding:56px 20px; color:var(--g400); }
+.empty .icon { font-size:46px; margin-bottom:10px; }
+.empty strong { display:block; font-size:16px; color:var(--g600); }
+.empty p { margin-top:6px; font-size:14px; }
+.loader { display:flex; align-items:center; justify-content:center; gap:10px; padding:56px; color:var(--g400); font-size:15px; }
+.spin { width:22px; height:22px; border:3px solid var(--g200); border-top-color:var(--blue); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.err-bar {
+  background:#fef2f2; border:1px solid #fecaca; border-radius:var(--r);
+  padding:11px 14px; margin-bottom:14px; font-size:13px; color:var(--red); display:none;
+}
+.err-bar.on { display:block; }
+.tbl-footer { font-size:12px; color:var(--g400); text-align:right; margin-top:9px; }
+
+/* ── Waivers panel ───────────────────────────────────────── */
+.waiver-grid { display:grid; gap:10px; }
+.waiver-card {
+  background:#fff; border-radius:var(--r); box-shadow:var(--sh);
+  padding:15px 18px; display:flex; flex-wrap:wrap; gap:6px; align-items:flex-start;
+}
+.waiver-name  { font-weight:700; font-size:14px; flex-basis:100%; }
+.waiver-meta  { font-size:12px; color:var(--g600); display:flex; align-items:center; gap:5px; }
+.waiver-parent{ font-size:12px; color:#78350f; background:#fef3c7; border-radius:6px; padding:3px 9px; margin-top:4px; flex-basis:100%; }
+.waiver-fields{ font-size:12px; color:var(--g600); flex-basis:100%; }
+
+/* ── Log panel ───────────────────────────────────────────── */
+.log-card {
+  background:#fff; border-radius:var(--r); box-shadow:var(--sh);
+  padding:16px 18px; margin-bottom:12px;
+}
+.log-hdr { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.log-title { font-weight:700; font-size:15px; flex:1; }
+.log-date  { font-size:12px; color:var(--g600); }
+.log-members { display:flex; flex-direction:column; gap:4px; }
+.log-member  { font-size:13px; color:var(--g800); display:flex; gap:8px; }
+.log-member span { color:var(--g400); font-size:12px; }
+
+/* ── Modals ──────────────────────────────────────────────── */
+.overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,.5);
+  z-index:200; align-items:center; justify-content:center;
+  backdrop-filter:blur(3px);
+  display:none;
+}
+.overlay.open { display:flex; }
+.modal {
+  background:#fff; border-radius:14px; padding:26px;
+  width:460px; max-width:95vw;
+  box-shadow:0 20px 60px rgba(0,0,0,.25);
+}
+.modal h2 { font-size:18px; color:var(--navy); margin-bottom:5px; }
+.modal .sub { font-size:13px; color:var(--g600); margin-bottom:18px; }
+.fg { margin-bottom:13px; }
+.fg label { display:block; font-size:11px; font-weight:700; color:var(--g600); margin-bottom:4px; text-transform:uppercase; letter-spacing:.4px; }
+.fg input, .fg select {
+  width:100%; padding:8px 11px;
+  border:1px solid var(--g200); border-radius:8px; font-size:14px;
+}
+.fg input:focus, .fg select:focus { outline:none; border-color:var(--sky); }
+.fg .hint { font-size:11px; color:var(--g400); margin-top:3px; }
+.modal-ftr { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+.notice {
+  background:var(--light); border:1px solid #bfdbfe; border-radius:8px;
+  padding:9px 13px; font-size:12px; color:var(--blue); margin-bottom:14px; line-height:1.5;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media(max-width:680px){
+  header,#filter-toolbar,.stats-bar,.main,#attend-banner,.tab-row { padding-left:14px; padding-right:14px; }
+  #filter-toolbar { flex-direction:column; align-items:stretch; }
+  .tbr-r { margin-left:0; }
+  th:nth-child(5),td:nth-child(5),
+  th:nth-child(6),td:nth-child(6) { display:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="hdr-l">
+    <div class="hdr-logo">🚣</div>
+    <div class="hdr-title">
+      <h1 id="venue-name">Rowing Program</h1>
+      <p>Member Roster &amp; Attendance</p>
+    </div>
+  </div>
+  <div class="hdr-r">
+    <span id="last-updated"></span>
+    <button class="btn btn-secondary btn-sm" onclick="openModal('cfg-modal')">⚙️ Settings</button>
+    <button class="btn btn-primary btn-sm"   onclick="loadAll()">↻ Refresh</button>
+  </div>
+</header>
+
+<!-- Stats bar -->
+<div class="stats-bar">
+  <div class="stat"><div class="stat-val" id="s-active">—</div><div class="stat-lbl">Active Members</div></div>
+  <div class="stat"><div class="stat-val" id="s-total">—</div><div class="stat-lbl">Total Members</div></div>
+  <div class="stat"><div class="stat-val" id="s-waivers">—</div><div class="stat-lbl">Signed Waivers</div></div>
+  <div class="stat"><div class="stat-val" id="s-present">0</div><div class="stat-lbl">Checked In Today</div></div>
+</div>
+
+<!-- Tab row — always visible -->
+<div class="tab-row">
+  <div class="tab active" onclick="switchTab('roster')">📋 Roster</div>
+  <div class="tab"        onclick="switchTab('waivers')">📄 Waivers</div>
+  <div class="tab"        onclick="switchTab('log')">✅ Attendance Log</div>
+</div>
+
+<!-- Filter toolbar — only shown on Roster tab -->
+<div id="filter-toolbar">
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input id="q" type="text" placeholder="Search name or email…" oninput="applyFilters()" />
+  </div>
+  <div class="filter-grp" id="status-btns">
+    <button class="fbtn active" data-s="active"   onclick="setStatus(this)">Active</button>
+    <button class="fbtn"        data-s="inactive" onclick="setStatus(this)">Inactive</button>
+    <button class="fbtn"        data-s="all"      onclick="setStatus(this)">All</button>
+  </div>
+  <div class="filter-grp">
+    <button class="fbtn" id="wav-btn" onclick="cycleWaiverFilter()">🔏 Waiver Status</button>
+  </div>
+  <div class="tbr-r">
+    <button class="btn btn-success"   id="attend-start-btn" onclick="openModal('session-modal')">📋 Start Attendance</button>
+    <button class="btn btn-secondary" onclick="exportCSV()">⬇ Export CSV</button>
+    <div class="view-toggle">
+      <button class="vbtn active" id="vt" title="Table" onclick="setView('table')">☰</button>
+      <button class="vbtn"        id="vg" title="Grid"  onclick="setView('grid')">⊞</button>
+    </div>
+  </div>
+</div>
+
+<!-- Attendance banner -->
+<div id="attend-banner">
+  <span>📍</span>
+  <div id="attend-info">Session: <strong id="sess-name">—</strong> &nbsp;·&nbsp; <span id="attend-count">0</span> checked in</div>
+  <button class="btn btn-success btn-sm"   onclick="saveSession()">💾 Save &amp; Close</button>
+  <button class="btn btn-secondary btn-sm" onclick="clearSession()">✕ Cancel</button>
+</div>
+
+<!-- Main content -->
+<div class="main">
+
+  <!-- ROSTER PANEL -->
+  <div id="panel-roster" class="panel active">
+    <div id="err-bar" class="err-bar"></div>
+    <div id="roster-out"><div class="loader"><div class="spin"></div> Loading members…</div></div>
+  </div>
+
+  <!-- WAIVERS PANEL -->
+  <div id="panel-waivers" class="panel">
+    <div id="waivers-out"><div class="loader"><div class="spin"></div> Loading waivers…</div></div>
+  </div>
+
+  <!-- LOG PANEL -->
+  <div id="panel-log" class="panel">
+    <div id="log-out">
+      <div class="empty">
+        <div class="icon">📋</div>
+        <strong>No sessions recorded yet</strong>
+        <p>Use the Roster tab to start an attendance session.</p>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- ── Config modal ─────────────────────────────────────── -->
+<div class="overlay" id="cfg-modal">
+  <div class="modal">
+    <h2>⚙️ Connection Settings</h2>
+    <p class="sub">Connect to your Roller account for live data.</p>
+    <div class="notice">
+      💡 API keys: <strong>Roller → Settings → Integrations → API Keys</strong>.
+      Leave the Backend URL blank to use <strong>demo mode</strong>.
+    </div>
+    <div class="fg">
+      <label>Backend URL</label>
+      <input id="cfg-url" placeholder="http://localhost:5050" />
+      <div class="hint">Where server.py is running (or your Render URL)</div>
+    </div>
+    <div class="fg">
+      <label>Club / Program Name</label>
+      <input id="cfg-name" placeholder="e.g. Harbor Rowing Club" />
+    </div>
+    <div class="modal-ftr">
+      <button class="btn btn-secondary" onclick="closeModal('cfg-modal')">Cancel</button>
+      <button class="btn btn-primary"   onclick="saveConfig()">Save &amp; Reload</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Session modal ─────────────────────────────────────── -->
+<div class="overlay" id="session-modal">
+  <div class="modal">
+    <h2>📋 Start Attendance Session</h2>
+    <p class="sub">Name this session so it appears in the Attendance Log.</p>
+    <div class="fg">
+      <label>Session Name</label>
+      <input id="sess-name-in" placeholder="e.g. Morning Practice — July 1" />
+    </div>
+    <div class="fg">
+      <label>Date</label>
+      <input id="sess-date-in" type="date" />
+    </div>
+    <div class="modal-ftr">
+      <button class="btn btn-secondary" onclick="closeModal('session-modal')">Cancel</button>
+      <button class="btn btn-success"   onclick="beginSession()">Begin Session</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+let allMembers   = [];
+let filtered     = [];
+let waiverData   = [];
+let view         = 'table';
+let statusFilter = 'active';
+let wavFilter    = null;   // null | true | false
+let sortCol      = 'lastName';
+let sortAsc      = true;
+let session      = null;   // { name, date }
+let present      = new Set();
+let log          = [];
+
+let cfg = {
+  url:  localStorage.getItem('rr_url')  || '',
+  name: localStorage.getItem('rr_name') || 'Rowing Program',
+};
+
+const API = () => cfg.url ? cfg.url.replace(/\/$/, '') : '';
+
+// ─────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('venue-name').textContent = cfg.name;
+  document.getElementById('sess-date-in').value = todayStr();
+  loadAll();
+});
+
+// ─────────────────────────────────────────────────────────────
+// Data
+// ─────────────────────────────────────────────────────────────
+async function loadAll() {
+  clearErr();
+  setRoster('<div class="loader"><div class="spin"></div> Loading members…</div>');
+  try {
+    const [sumRes, memRes] = await Promise.all([
+      apiFetch('/api/summary'),
+      apiFetch(`/api/members?status=${statusFilter}`),
+    ]);
+    if (sumRes && memRes) {
+      updateStats(sumRes);
+      allMembers = memRes.data || [];
+      document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      applyFilters();
+      loadWaivers();
+      return;
+    }
+  } catch(e) { /* fall to demo */ }
+  useDemoData();
+}
+
+async function loadWaivers() {
+  try {
+    const data = await apiFetch('/api/waivers');
+    if (data) { waiverData = data.data || []; renderWaivers(); return; }
+  } catch(e) {}
+  waiverData = DEMO_WAIVERS;
+  renderWaivers();
+}
+
+async function apiFetch(path) {
+  if (!API()) throw new Error('no backend');
+  const res = await fetch(API() + path, { signal: AbortSignal.timeout(9000) });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
+
+function useDemoData() {
+  allMembers = DEMO_MEMBERS;
+  waiverData = DEMO_WAIVERS;
+  updateStats({ activeMembers:24, totalMembers:31, signedWaivers:19 });
+  document.getElementById('last-updated').textContent = '⚠️ Demo mode';
+  applyFilters();
+  renderWaivers();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Stats
+// ─────────────────────────────────────────────────────────────
+function updateStats(s) {
+  set('s-active',  s.activeMembers  ?? '—');
+  set('s-total',   s.totalMembers   ?? '—');
+  set('s-waivers', s.signedWaivers  ?? '—');
+}
+function updatePresentCount() {
+  set('s-present',    present.size);
+  set('attend-count', present.size);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tabs
+// ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab')[['roster','waivers','log'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  // Show filter toolbar only on roster tab
+  document.getElementById('filter-toolbar').style.display = name === 'roster' ? 'flex' : 'none';
+}
+
+// ─────────────────────────────────────────────────────────────
+// Filters
+// ─────────────────────────────────────────────────────────────
+function setStatus(btn) {
+  document.querySelectorAll('#status-btns .fbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  statusFilter = btn.dataset.s;
+  loadAll();
+}
+
+function cycleWaiverFilter() {
+  const btn = document.getElementById('wav-btn');
+  if (wavFilter === null)       { wavFilter = true;  btn.classList.add('active'); btn.textContent = '🔏 Has Waiver'; }
+  else if (wavFilter === true)  { wavFilter = false; btn.textContent = '🔏 No Waiver'; }
+  else                          { wavFilter = null;  btn.classList.remove('active'); btn.textContent = '🔏 Waiver Status'; }
+  applyFilters();
+}
+
+function applyFilters() {
+  const q = (document.getElementById('q').value || '').toLowerCase().trim();
+  filtered = allMembers.filter(m => {
+    if (q && !m.fullName.toLowerCase().includes(q) && !(m.email||'').toLowerCase().includes(q)) return false;
+    if (wavFilter !== null && m.hasWaiver !== wavFilter) return false;
+    return true;
+  });
+  filtered.sort((a, b) => {
+    let va = sortCol === 'hasWaiver' ? (a.hasWaiver?1:0) : (a[sortCol]||'');
+    let vb = sortCol === 'hasWaiver' ? (b.hasWaiver?1:0) : (b[sortCol]||'');
+    const c = String(va).toLowerCase() < String(vb).toLowerCase() ? -1 : String(va).toLowerCase() > String(vb).toLowerCase() ? 1 : 0;
+    return sortAsc ? c : -c;
+  });
+  render();
+}
+
+function sortBy(col) {
+  sortAsc = (sortCol === col) ? !sortAsc : true;
+  sortCol = col;
+  applyFilters();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Render roster
+// ─────────────────────────────────────────────────────────────
+function render() {
+  if (!filtered.length) {
+    setRoster('<div class="empty"><div class="icon">🚣</div><strong>No members found</strong><p>Try a different search or filter.</p></div>');
+    return;
+  }
+  view === 'table' ? renderTable() : renderGrid();
+}
+
+function renderTable() {
+  const sa = col => `onclick="sortBy('${col}')" class="${sortCol===col?'sorted':''}"`;
+  const arrow = col => sortCol===col ? (sortAsc?'↑':'↓') : '↕';
+
+  const rows = filtered.map(m => {
+    const ini   = initials(m);
+    const color = memberColor(m.memberId||m.fullName);
+    const chked = present.has(String(m.memberId)) ? 'checked' : '';
+    const dis   = session ? '' : 'disabled title="Start an attendance session first"';
+    return `<tr>
+      <td class="tc">
+        <input type="checkbox" class="chk" ${chked} ${dis}
+          onchange="togglePresent('${m.memberId}',this.checked)"/>
+      </td>
+      <td>
+        <div class="mem-cell">
+          <div class="avatar" style="background:${color}">${ini}</div>
+          <div>
+            <div class="mem-name">${esc(m.fullName)}</div>
+            <div class="mem-email">${esc(m.email)}</div>
+          </div>
+        </div>
+      </td>
+      <td>${esc(m.membershipName||'—')}</td>
+      <td>${statusBadge(m.status)}</td>
+      <td>${waiverBadge(m)}</td>
+      <td>${fmt(m.endDate)}</td>
+      <td>${esc(m.phone||'—')}</td>
+    </tr>`;
+  }).join('');
+
+  setRoster(`
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:38px">✓</th>
+          <th ${sa('lastName')}>Name ${arrow('lastName')}</th>
+          <th ${sa('membershipName')}>Membership ${arrow('membershipName')}</th>
+          <th ${sa('status')}>Status ${arrow('status')}</th>
+          <th ${sa('hasWaiver')}>Waiver ${arrow('hasWaiver')}</th>
+          <th ${sa('endDate')}>Expires ${arrow('endDate')}</th>
+          <th>Phone</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="tbl-footer">Showing ${filtered.length} of ${allMembers.length} members</div>
+  `);
+}
+
+function renderGrid() {
+  const cards = filtered.map(m => {
+    const ini   = initials(m);
+    const color = memberColor(m.memberId||m.fullName);
+    const chked = present.has(String(m.memberId));
+    const dis   = session ? '' : 'disabled';
+    return `<div class="card">
+      <div class="card-hdr">
+        <div class="card-av" style="background:${color}">${ini}</div>
+        <div>
+          <div class="card-name">${esc(m.fullName)}</div>
+          <div class="card-sub">${esc(m.membershipName||'Member')}</div>
+        </div>
+      </div>
+      <div class="card-body">
+        ${m.email ? `<div class="card-row">✉️ ${esc(m.email)}</div>` : ''}
+        ${m.phone ? `<div class="card-row">📞 ${esc(m.phone)}</div>`  : ''}
+        ${m.endDate ? `<div class="card-row">📅 Expires ${fmt(m.endDate)}</div>` : ''}
+      </div>
+      <div class="card-ftr">
+        <div class="card-badges">${statusBadge(m.status)} ${waiverBadge(m)}</div>
+        <label class="card-chk ${chked?'present':''}">
+          <input type="checkbox" ${chked?'checked':''} ${dis}
+            onchange="togglePresent('${m.memberId}',this.checked,this)"/>
+          ${chked?'Present':'Mark In'}
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+  setRoster(`<div class="card-grid">${cards}</div>`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Render waivers
+// ─────────────────────────────────────────────────────────────
+function renderWaivers() {
+  if (!waiverData.length) {
+    document.getElementById('waivers-out').innerHTML =
+      '<div class="empty"><div class="icon">📄</div><strong>No waivers found</strong></div>';
+    return;
+  }
+  const cards = waiverData.map(w => {
+    const customStr = w.customFields && Object.keys(w.customFields).length
+      ? Object.entries(w.customFields).map(([k,v])=>`<em>${esc(k)}</em>: ${esc(String(v))}`).join(' &nbsp;·&nbsp; ')
+      : '';
+    const parentStr = w.isMinor && (w.parentFirstName||w.parentLastName)
+      ? `<div class="waiver-parent">👤 Parent/Guardian: <strong>${esc(w.parentFirstName)} ${esc(w.parentLastName)}</strong>${w.parentEmail?` — ${esc(w.parentEmail)}`:''}</div>`
+      : '';
+    return `<div class="waiver-card">
+      <div class="waiver-name">${esc(w.firstName)} ${esc(w.lastName)} ${w.isMinor?'<span class="badge b-minor">Minor</span>':''}</div>
+      <div class="waiver-meta">✉️ ${esc(w.email||'—')}</div>
+      <div class="waiver-meta">📄 ${esc(w.waiverName||'Waiver')} &nbsp;·&nbsp; 📅 Signed ${fmt(w.signedAt)}</div>
+      ${parentStr}
+      ${customStr?`<div class="waiver-fields">📝 ${customStr}</div>`:''}
+    </div>`;
+  }).join('');
+  document.getElementById('waivers-out').innerHTML = `<div class="waiver-grid">${cards}</div>`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Attendance
+// ─────────────────────────────────────────────────────────────
+function beginSession() {
+  const name = document.getElementById('sess-name-in').value.trim()
+    || 'Practice — ' + new Date().toLocaleDateString();
+  const date = document.getElementById('sess-date-in').value || todayStr();
+  session = { name, date, started: new Date().toISOString() };
+  present.clear();
+  updatePresentCount();
+
+  set('sess-name', name);
+  document.getElementById('attend-banner').classList.add('on');
+  // Update start button to reflect active session
+  document.getElementById('attend-start-btn').textContent = '📋 Session Active';
+  document.getElementById('attend-start-btn').disabled = true;
+
+  closeModal('session-modal');
+  // Switch to roster so coaches can check people in
+  switchTab('roster');
+  render(); // re-render to enable checkboxes
+}
+
+function togglePresent(id, checked, labelEl) {
+  if (checked) present.add(String(id));
+  else         present.delete(String(id));
+  updatePresentCount();
+  if (labelEl) {
+    const lbl = labelEl.closest('.card-chk');
+    if (lbl) { lbl.classList.toggle('present', checked); lbl.childNodes[lbl.childNodes.length-1].textContent = checked ? 'Present' : 'Mark In'; }
+  }
+}
+
+function saveSession() {
+  if (!session) return;
+  const attendedMembers = allMembers.filter(m => present.has(String(m.memberId)));
+  const record = {
+    ...session,
+    saved: new Date().toISOString(),
+    count: present.size,
+    members: attendedMembers.map(m => ({ memberId:m.memberId, name:m.fullName, email:m.email, membership:m.membershipName })),
+  };
+  log.unshift(record);
+  renderLog();
+
+  const csvRows = [
+    ['Name','Email','Membership','Session','Date'],
+    ...record.members.map(m => [m.name, m.email, m.membership, record.name, record.date]),
+  ];
+  dlCSV(csvRows, `attendance_${record.date}.csv`);
+
+  endSession();
+  switchTab('log');
+}
+
+function clearSession() {
+  if (!confirm('Cancel this attendance session?')) return;
+  endSession();
+}
+
+function endSession() {
+  session = null;
+  present.clear();
+  updatePresentCount();
+  document.getElementById('attend-banner').classList.remove('on');
+  document.getElementById('attend-start-btn').textContent = '📋 Start Attendance';
+  document.getElementById('attend-start-btn').disabled = false;
+  render();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Attendance log
+// ─────────────────────────────────────────────────────────────
+function renderLog() {
+  if (!log.length) return;
+  document.getElementById('log-out').innerHTML = log.map((s, i) => `
+    <div class="log-card">
+      <div class="log-hdr">
+        <div>
+          <div class="log-title">${esc(s.name)}</div>
+          <div class="log-date">${fmt(s.date)} · ${s.count} member${s.count!==1?'s':''} present</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="redownload(${i})">⬇ CSV</button>
+      </div>
+      <div class="log-members">
+        ${s.members.map(m => `<div class="log-member">✅ ${esc(m.name)} <span>${esc(m.email)}</span></div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function redownload(i) {
+  const s = log[i];
+  dlCSV([
+    ['Name','Email','Membership','Session','Date'],
+    ...s.members.map(m => [m.name, m.email, m.membership, s.name, s.date]),
+  ], `attendance_${s.date}.csv`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Export
+// ─────────────────────────────────────────────────────────────
+function exportCSV() {
+  dlCSV([
+    ['Name','Email','Phone','Membership','Status','Waiver','Expires'],
+    ...filtered.map(m => [m.fullName, m.email, m.phone, m.membershipName, m.status, m.hasWaiver?'Yes':'No', m.endDate]),
+  ], 'rowing_roster.csv');
+}
+
+function dlCSV(rows, name) {
+  const csv  = rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const link = Object.assign(document.createElement('a'), {
+    href:     URL.createObjectURL(new Blob([csv], {type:'text/csv'})),
+    download: name,
+  });
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+// ─────────────────────────────────────────────────────────────
+// View / modals
+// ─────────────────────────────────────────────────────────────
+function setView(v) {
+  view = v;
+  document.getElementById('vt').classList.toggle('active', v==='table');
+  document.getElementById('vg').classList.toggle('active', v==='grid');
+  render();
+}
+
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// Close modals when clicking outside
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('overlay')) e.target.classList.remove('open');
+});
+
+function saveConfig() {
+  cfg.url  = document.getElementById('cfg-url').value.trim();
+  cfg.name = document.getElementById('cfg-name').value.trim() || 'Rowing Program';
+  localStorage.setItem('rr_url',  cfg.url);
+  localStorage.setItem('rr_name', cfg.name);
+  document.getElementById('venue-name').textContent = cfg.name;
+  closeModal('cfg-modal');
+  loadAll();
+}
+
+function openSettings() {
+  document.getElementById('cfg-url').value  = cfg.url;
+  document.getElementById('cfg-name').value = cfg.name;
+  openModal('cfg-modal');
+}
+// Override header settings button to pre-fill
+document.querySelector('.hdr-r .btn-secondary').onclick = openSettings;
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+function setRoster(html) { document.getElementById('roster-out').innerHTML = html; }
+function clearErr()      { const e = document.getElementById('err-bar'); e.textContent=''; e.classList.remove('on'); }
+function showErr(msg)    { const e = document.getElementById('err-bar'); e.textContent='⚠️ '+msg; e.classList.add('on'); }
+function set(id, v)      { const el = document.getElementById(id); if(el) el.textContent = v; }
+function esc(s)          { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmt(d)          { if(!d) return '—'; try{ return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); } catch{ return d; } }
+function todayStr()      { return new Date().toISOString().split('T')[0]; }
+function initials(m)     { return ((m.firstName?.[0]||'')+(m.lastName?.[0]||'')).toUpperCase() || '?'; }
+
+function memberColor(s) {
+  const pal = ['#1352a2','#0e8a7b','#6d28d9','#b45309','#0369a1','#be185d','#047857','#9f1239'];
+  let h = 0; for (const c of String(s||'')) h = c.charCodeAt(0) + ((h<<5)-h);
+  return pal[Math.abs(h) % pal.length];
+}
+
+function statusBadge(s) {
+  return s?.toLowerCase() === 'active'
+    ? '<span class="badge b-active">● Active</span>'
+    : '<span class="badge b-inactive">Inactive</span>';
+}
+function waiverBadge(m) {
+  return m.hasWaiver
+    ? `<span class="badge b-waiver" title="Signed ${fmt(m.waiverDate)}">✓ Waiver</span>`
+    : '<span class="badge b-nowav">✗ No Waiver</span>';
+}
+
+// ─────────────────────────────────────────────────────────────
+// Demo data
+// ─────────────────────────────────────────────────────────────
+const DEMO_MEMBERS = [
+  {memberId:'1001',firstName:'Alex',    lastName:'Chen',      fullName:'Alex Chen',      email:'alex.chen@email.com',     phone:'555-234-5678', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-03', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1002',firstName:'Jordan',  lastName:'Rivera',    fullName:'Jordan Rivera',  email:'j.rivera@email.com',      phone:'555-345-6789', membershipName:'Recreational Rower',status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-09-15', plu:'4002'},
+  {memberId:'1003',firstName:'Sam',     lastName:'Okonkwo',   fullName:'Sam Okonkwo',    email:'sam.o@email.com',         phone:'555-456-7890', membershipName:'Youth Program',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1004',firstName:'Morgan',  lastName:'Walsh',     fullName:'Morgan Walsh',   email:'morgan.w@email.com',      phone:'555-567-8901', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-05', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1005',firstName:'Taylor',  lastName:'Kim',       fullName:'Taylor Kim',     email:'taylor.k@email.com',      phone:'555-678-9012', membershipName:'Masters Rower',     status:'active',   hasWaiver:true,  waiverDate:'2026-01-10', endDate:'2027-01-15', plu:'4004'},
+  {memberId:'1006',firstName:'Casey',   lastName:'Patel',     fullName:'Casey Patel',    email:'casey.p@email.com',       phone:'555-789-0123', membershipName:'Recreational Rower',status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-10-01', plu:'4002'},
+  {memberId:'1007',firstName:'Jamie',   lastName:'Thompson',  fullName:'Jamie Thompson', email:'jamie.t@email.com',       phone:'555-890-1234', membershipName:'Youth Program',     status:'active',   hasWaiver:true,  waiverDate:'2026-02-01', endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1008',firstName:'Riley',   lastName:'Anderson',  fullName:'Riley Anderson', email:'riley.a@email.com',       phone:'555-901-2345', membershipName:'Masters Rower',     status:'active',   hasWaiver:true,  waiverDate:'2026-01-12', endDate:'2027-02-28', plu:'4004'},
+  {memberId:'1009',firstName:'Drew',    lastName:'Garcia',    fullName:'Drew Garcia',    email:'drew.g@email.com',        phone:'555-012-3456', membershipName:'Competitive Rower', status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1010',firstName:'Avery',   lastName:'Martinez',  fullName:'Avery Martinez', email:'avery.m@email.com',       phone:'555-123-4568', membershipName:'Recreational Rower',status:'active',   hasWaiver:true,  waiverDate:'2026-01-15', endDate:'2026-11-30', plu:'4002'},
+  {memberId:'1011',firstName:'Quinn',   lastName:'Johnson',   fullName:'Quinn Johnson',  email:'quinn.j@email.com',       phone:'555-234-5679', membershipName:'Competitive Rower', status:'active',   hasWaiver:true,  waiverDate:'2026-01-08', endDate:'2026-12-31', plu:'4001'},
+  {memberId:'1012',firstName:'Parker',  lastName:'Lee',       fullName:'Parker Lee',     email:'parker.l@email.com',      phone:'555-345-6780', membershipName:'Youth Program',     status:'active',   hasWaiver:false, waiverDate:null,         endDate:'2026-08-31', plu:'4003'},
+  {memberId:'1013',firstName:'Reese',   lastName:'Wilson',    fullName:'Reese Wilson',   email:'reese.w@email.com',       phone:'555-456-7891', membershipName:'Masters Rower',     status:'inactive', hasWaiver:true,  waiverDate:'2025-01-20', endDate:'2025-12-01', plu:'4004'},
+  {memberId:'1014',firstName:'Skylar',  lastName:'Brown',     fullName:'Skylar Brown',   email:'skylar.b@email.com',      phone:'555-567-8902', membershipName:'Recreational Rower',status:'inactive', hasWaiver:false, waiverDate:null,         endDate:'2025-11-15', plu:'4002'},
+];
+
+const DEMO_WAIVERS = [
+  {firstName:'Alex',  lastName:'Chen',     email:'alex.chen@email.com',  waiverName:'2026 Liability Waiver',  signedAt:'2026-01-03', isMinor:false, parentFirstName:'', parentLastName:'', parentEmail:'', customFields:{}},
+  {firstName:'Jordan',lastName:'Rivera',   email:'j.rivera@email.com',   waiverName:'2026 Liability Waiver',  signedAt:'2026-01-05', isMinor:false, parentFirstName:'', parentLastName:'', parentEmail:'', customFields:{}},
+  {firstName:'Sam',   lastName:'Okonkwo',  email:'sam.o@email.com',      waiverName:'Youth Participant Waiver',signedAt:'2026-02-01',isMinor:true,  parentFirstName:'David',parentLastName:'Okonkwo',parentEmail:'david.o@email.com', customFields:{emergencyContact:'555-111-2222', medicalNotes:'None'}},
+  {firstName:'Morgan',lastName:'Walsh',    email:'morgan.w@email.com',   waiverName:'2026 Liability Waiver',  signedAt:'2026-01-05', isMinor:false, parentFirstName:'', parentLastName:'', parentEmail:'', customFields:{}},
+  {firstName:'Taylor',lastName:'Kim',      email:'taylor.k@email.com',   waiverName:'2026 Liability Waiver',  signedAt:'2026-01-10', isMinor:false, parentFirstName:'', parentLastName:'', parentEmail:'', customFields:{}},
+  {firstName:'Jamie', lastName:'Thompson', email:'jamie.t@email.com',    waiverName:'Youth Participant Waiver',signedAt:'2026-02-01',isMinor:true,  parentFirstName:'Lisa',parentLastName:'Thompson',parentEmail:'lisa.t@email.com', customFields:{emergencyContact:'555-333-4444', medicalNotes:'EpiPen required'}},
+];
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Render.com deployment config
+# 1. Push this folder to a GitHub repo
+# 2. Go to render.com → New → Web Service → connect the repo
+# 3. Render auto-detects this file and sets everything up
+# 4. Add your environment variables in the Render dashboard (see .env.example)
+
+services:
+  - type: web
+    name: rowing-roster
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: ROLLER_CLIENT_ID
+        sync: false          # set this in the Render dashboard
+      - key: ROLLER_CLIENT_SECRET
+        sync: false          # set this in the Render dashboard
+      - key: ROLLER_VENUE_ID
+        sync: false          # set this in the Render dashboard
+      - key: DEMO_MODE
+        value: "true"          # flip to "false" when you add your Roller credentials
+      - key: MEMBERSHIP_PLUS
+        value: "8565,8572,8573,8574,8575,8579,9528,9529,9530,9531,9547,9548,9549,9550"

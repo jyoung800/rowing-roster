@@ -1,0 +1,364 @@
+"""
+Rowing Program Roster Dashboard — Roller API Backend
+=====================================================
+LOCAL:  python server.py  →  open http://localhost:5050
+CLOUD:  Deploy to Render (see README). The dashboard HTML is served
+        directly from this server so coaches just bookmark one URL.
+
+DEMO MODE (no Roller credentials needed):
+  Set DEMO_MODE=true in your .env or Render environment variables.
+  Returns realistic sample data so coaches can test the full UI
+  without touching your live Roller account.
+
+Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
+"""
+
+import os
+import time
+import requests
+from datetime import datetime, timezone
+from functools import wraps
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__, static_folder="static")
+CORS(app)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────────────────────────
+DEMO_MODE            = os.getenv("DEMO_MODE", "false").lower() == "true"
+ROLLER_CLIENT_ID     = os.getenv("ROLLER_CLIENT_ID",     "")
+ROLLER_CLIENT_SECRET = os.getenv("ROLLER_CLIENT_SECRET", "")
+ROLLER_VENUE_ID      = os.getenv("ROLLER_VENUE_ID",      "")
+PORT                 = int(os.getenv("PORT", 5050))
+
+_plu_env        = os.getenv("MEMBERSHIP_PLUS", "8565,8572,8573,8574,8575,8579,9528,9529,9530,9531,9547,9548,9549,9550")
+MEMBERSHIP_PLUS = [p.strip() for p in _plu_env.split(",") if p.strip()]
+
+PLU_FIELD_CANDIDATES = ("plu", "productCode", "sku", "productPlu", "externalId", "barcode")
+
+ROLLER_TOKEN_URL = "https://auth.roller.app/oauth/token"
+ROLLER_DATA_API  = "https://data.roller.app"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Demo data — realistic sample roster for testing
+# ─────────────────────────────────────────────────────────────────────────────
+DEMO_MEMBERS_DATA = [
+    {"memberId":"1001","firstName":"Alex",    "lastName":"Chen",      "fullName":"Alex Chen",       "email":"alex.chen@email.com",    "phone":"555-234-5678","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-03","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1002","firstName":"Jordan",  "lastName":"Rivera",    "fullName":"Jordan Rivera",   "email":"j.rivera@email.com",     "phone":"555-345-6789","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-09-15","plu":"8572"},
+    {"memberId":"1003","firstName":"Sam",     "lastName":"Okonkwo",   "fullName":"Sam Okonkwo",     "email":"sam.o@email.com",        "phone":"555-456-7890","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1004","firstName":"Morgan",  "lastName":"Walsh",     "fullName":"Morgan Walsh",    "email":"morgan.w@email.com",     "phone":"555-567-8901","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-05","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1005","firstName":"Taylor",  "lastName":"Kim",       "fullName":"Taylor Kim",      "email":"taylor.k@email.com",     "phone":"555-678-9012","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-10","endDate":"2027-01-15","plu":"8574"},
+    {"memberId":"1006","firstName":"Casey",   "lastName":"Patel",     "fullName":"Casey Patel",     "email":"casey.p@email.com",      "phone":"555-789-0123","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-01","plu":"8572"},
+    {"memberId":"1007","firstName":"Jamie",   "lastName":"Thompson",  "fullName":"Jamie Thompson",  "email":"jamie.t@email.com",      "phone":"555-890-1234","membershipName":"Youth Program",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-01","endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1008","firstName":"Riley",   "lastName":"Anderson",  "fullName":"Riley Anderson",  "email":"riley.a@email.com",      "phone":"555-901-2345","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-12","endDate":"2027-02-28","plu":"8574"},
+    {"memberId":"1009","firstName":"Drew",    "lastName":"Garcia",    "fullName":"Drew Garcia",     "email":"drew.g@email.com",       "phone":"555-012-3456","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1010","firstName":"Avery",   "lastName":"Martinez",  "fullName":"Avery Martinez",  "email":"avery.m@email.com",      "phone":"555-123-4568","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-15","endDate":"2026-11-30","plu":"8572"},
+    {"memberId":"1011","firstName":"Quinn",   "lastName":"Johnson",   "fullName":"Quinn Johnson",   "email":"quinn.j@email.com",      "phone":"555-234-5679","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-08","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1012","firstName":"Parker",  "lastName":"Lee",       "fullName":"Parker Lee",      "email":"parker.l@email.com",     "phone":"555-345-6780","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1013","firstName":"Reese",   "lastName":"Wilson",    "fullName":"Reese Wilson",    "email":"reese.w@email.com",      "phone":"555-456-7891","membershipName":"Masters Rower",      "status":"inactive","hasWaiver":True, "waiverDate":"2025-01-20","endDate":"2025-12-01","plu":"8574"},
+    {"memberId":"1014","firstName":"Skylar",  "lastName":"Brown",     "fullName":"Skylar Brown",    "email":"skylar.b@email.com",     "phone":"555-567-8902","membershipName":"Recreational Rower", "status":"inactive","hasWaiver":False,"waiverDate":None,        "endDate":"2025-11-15","plu":"8572"},
+    {"memberId":"1015","firstName":"Cameron", "lastName":"Davis",     "fullName":"Cameron Davis",   "email":"cam.d@email.com",        "phone":"555-678-9013","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-20","endDate":"2026-12-31","plu":"8565"},
+    {"memberId":"1016","firstName":"Rowan",   "lastName":"Foster",    "fullName":"Rowan Foster",    "email":"rowan.f@email.com",      "phone":"555-789-0124","membershipName":"Youth Program",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-02-10","endDate":"2026-08-31","plu":"8573"},
+    {"memberId":"1017","firstName":"Peyton",  "lastName":"Hughes",    "fullName":"Peyton Hughes",   "email":"peyton.h@email.com",     "phone":"555-890-1235","membershipName":"Masters Rower",      "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-25","endDate":"2027-01-31","plu":"8574"},
+    {"memberId":"1018","firstName":"Sage",    "lastName":"Nguyen",    "fullName":"Sage Nguyen",     "email":"sage.n@email.com",       "phone":"555-901-2346","membershipName":"Recreational Rower", "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-10-15","plu":"8572"},
+    {"memberId":"1019","firstName":"Blake",   "lastName":"Ortiz",     "fullName":"Blake Ortiz",     "email":"blake.o@email.com",      "phone":"555-012-3457","membershipName":"Competitive Rower",  "status":"active",  "hasWaiver":True, "waiverDate":"2026-01-30","endDate":"2026-12-31","plu":"8579"},
+    {"memberId":"1020","firstName":"Dakota",  "lastName":"Price",     "fullName":"Dakota Price",    "email":"dakota.p@email.com",     "phone":"555-123-4569","membershipName":"Youth Program",      "status":"active",  "hasWaiver":False,"waiverDate":None,        "endDate":"2026-08-31","plu":"8573"},
+]
+
+DEMO_WAIVERS_DATA = [
+    {"signedWaiverId":"w001","customerId":"1001","firstName":"Alex",    "lastName":"Chen",     "email":"alex.chen@email.com",   "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-03","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w002","customerId":"1002","firstName":"Jordan",  "lastName":"Rivera",   "email":"j.rivera@email.com",    "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-05","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w003","customerId":"1003","firstName":"Sam",     "lastName":"Okonkwo",  "email":"sam.o@email.com",       "waiverName":"Youth Participant Waiver","signedAt":"2026-02-01","isMinor":True, "parentFirstName":"David","parentLastName":"Okonkwo","parentEmail":"david.o@email.com","customFields":{"emergencyContact":"555-111-2222","medicalNotes":"None"}},
+    {"signedWaiverId":"w004","customerId":"1004","firstName":"Morgan",  "lastName":"Walsh",    "email":"morgan.w@email.com",    "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-05","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w005","customerId":"1005","firstName":"Taylor",  "lastName":"Kim",      "email":"taylor.k@email.com",    "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-10","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w006","customerId":"1007","firstName":"Jamie",   "lastName":"Thompson", "email":"jamie.t@email.com",     "waiverName":"Youth Participant Waiver","signedAt":"2026-02-01","isMinor":True, "parentFirstName":"Lisa","parentLastName":"Thompson","parentEmail":"lisa.t@email.com","customFields":{"emergencyContact":"555-333-4444","medicalNotes":"EpiPen required"}},
+    {"signedWaiverId":"w007","customerId":"1008","firstName":"Riley",   "lastName":"Anderson", "email":"riley.a@email.com",     "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-12","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w008","customerId":"1010","firstName":"Avery",   "lastName":"Martinez", "email":"avery.m@email.com",     "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-15","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w009","customerId":"1011","firstName":"Quinn",   "lastName":"Johnson",  "email":"quinn.j@email.com",     "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-08","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w010","customerId":"1015","firstName":"Cameron", "lastName":"Davis",    "email":"cam.d@email.com",       "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-20","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w011","customerId":"1016","firstName":"Rowan",   "lastName":"Foster",   "email":"rowan.f@email.com",     "waiverName":"Youth Participant Waiver","signedAt":"2026-02-10","isMinor":True, "parentFirstName":"Chris","parentLastName":"Foster","parentEmail":"chris.f@email.com","customFields":{"emergencyContact":"555-555-6666","medicalNotes":"Asthma — inhaler on site"}},
+    {"signedWaiverId":"w012","customerId":"1017","firstName":"Peyton",  "lastName":"Hughes",   "email":"peyton.h@email.com",    "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-25","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+    {"signedWaiverId":"w013","customerId":"1019","firstName":"Blake",   "lastName":"Ortiz",    "email":"blake.o@email.com",     "waiverName":"2026 Liability Waiver",   "signedAt":"2026-01-30","isMinor":False,"parentFirstName":"","parentLastName":"","parentEmail":"","customFields":{}},
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Token cache (live mode only)
+# ─────────────────────────────────────────────────────────────────────────────
+_token_cache: dict = {"token": None, "expires_at": 0.0}
+
+
+def get_access_token() -> str:
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires_at"] - 30:
+        return _token_cache["token"]
+    resp = requests.post(ROLLER_TOKEN_URL, json={
+        "client_id":     ROLLER_CLIENT_ID,
+        "client_secret": ROLLER_CLIENT_SECRET,
+        "audience":      "https://data.roller.app",
+        "grant_type":    "client_credentials",
+    }, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    _token_cache["token"]      = data["access_token"]
+    _token_cache["expires_at"] = now + data.get("expires_in", 3600)
+    return _token_cache["token"]
+
+
+def roller_get(path: str, params: dict | None = None) -> dict:
+    token = get_access_token()
+    for attempt in range(2):
+        resp = requests.get(
+            f"{ROLLER_DATA_API}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=15,
+        )
+        if resp.status_code == 401 and attempt == 0:
+            _token_cache["token"] = None
+            token = get_access_token()
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error decorator
+# ─────────────────────────────────────────────────────────────────────────────
+def handle_errors(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 502
+            return jsonify({"error": str(e), "status": code}), 502
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return wrapper
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Serve dashboard HTML
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return send_file("dashboard.html")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — health
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status":      "ok",
+        "mode":        "demo" if DEMO_MODE else "live",
+        "venue_id":    ROLLER_VENUE_ID or "(demo)",
+        "plu_filter":  MEMBERSHIP_PLUS,
+        "plu_count":   len(MEMBERSHIP_PLUS),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — summary
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/summary")
+@handle_errors
+def get_summary():
+    if DEMO_MODE:
+        active = sum(1 for m in DEMO_MEMBERS_DATA if m["status"] == "active")
+        return jsonify({
+            "activeMembers":   active,
+            "inactiveMembers": len(DEMO_MEMBERS_DATA) - active,
+            "totalMembers":    len(DEMO_MEMBERS_DATA),
+            "signedWaivers":   len(DEMO_WAIVERS_DATA),
+            "asOf":            datetime.now(timezone.utc).isoformat(),
+        })
+
+    membership_data = roller_get("/data/membershipstatuses", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
+    memberships = membership_data.get("data", [])
+    if MEMBERSHIP_PLUS:
+        memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
+
+    active       = sum(1 for m in memberships if m.get("status","").lower() == "active")
+    waiver_data  = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1})
+    return jsonify({
+        "activeMembers":   active,
+        "inactiveMembers": len(memberships) - active,
+        "totalMembers":    len(memberships),
+        "signedWaivers":   waiver_data.get("total", 0),
+        "asOf":            datetime.now(timezone.utc).isoformat(),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — members roster
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/members")
+@handle_errors
+def get_members():
+    status_filter = request.args.get("status", "active").lower()
+    search        = request.args.get("search", "").lower()
+
+    if DEMO_MODE:
+        roster = DEMO_MEMBERS_DATA if status_filter == "all" else [
+            m for m in DEMO_MEMBERS_DATA if m["status"] == status_filter
+        ]
+        if search:
+            roster = [m for m in roster if search in m["fullName"].lower() or search in m["email"].lower()]
+        roster = sorted(roster, key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
+        return jsonify({"total": len(roster), "status": status_filter, "data": roster})
+
+    # Live mode
+    membership_data = roller_get("/data/membershipstatuses", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
+    memberships     = membership_data.get("data", [])
+    if MEMBERSHIP_PLUS:
+        memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
+    if status_filter != "all":
+        memberships = [m for m in memberships if m.get("status","").lower() == status_filter]
+
+    customer_data = roller_get("/data/customers", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
+    customer_map  = {str(c["customerId"]): c for c in customer_data.get("data", [])}
+
+    roster = []
+    for m in memberships:
+        cid      = str(m.get("customerId",""))
+        customer = customer_map.get(cid, {})
+        first    = customer.get("firstName","")
+        last     = customer.get("lastName","")
+        full_name = f"{first} {last}".strip() or f"Member {cid}"
+        if search and search not in full_name.lower() and search not in customer.get("email","").lower():
+            continue
+        roster.append({
+            "memberId":        cid,
+            "firstName":       first,
+            "lastName":        last,
+            "fullName":        full_name,
+            "email":           customer.get("email",""),
+            "phone":           customer.get("phone",""),
+            "dateOfBirth":     customer.get("dateOfBirth",""),
+            "membershipName":  m.get("membershipName",""),
+            "membershipType":  m.get("membershipType",""),
+            "status":          m.get("status",""),
+            "startDate":       m.get("startDate",""),
+            "endDate":         m.get("endDate",""),
+            "nextBillingDate": m.get("nextBillingDate",""),
+            "plu":             next((str(m.get(f)) for f in PLU_FIELD_CANDIDATES if m.get(f)), ""),
+            "hasWaiver":       False,
+            "waiverDate":      None,
+        })
+
+    try:
+        waiver_data = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1000})
+        waiver_map  = {}
+        for w in waiver_data.get("data", []):
+            cid_w = str(w.get("customerId",""))
+            date  = w.get("signedAt") or w.get("createdAt") or ""
+            if cid_w not in waiver_map or date > waiver_map[cid_w]:
+                waiver_map[cid_w] = date
+        for entry in roster:
+            if entry["memberId"] in waiver_map:
+                entry["hasWaiver"]  = True
+                entry["waiverDate"] = waiver_map[entry["memberId"]]
+    except Exception:
+        pass
+
+    roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
+    return jsonify({"total": len(roster), "status": status_filter, "data": roster})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — waivers
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/waivers")
+@handle_errors
+def get_waivers():
+    if DEMO_MODE:
+        return jsonify({"total": len(DEMO_WAIVERS_DATA), "data": DEMO_WAIVERS_DATA})
+
+    data     = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
+    waivers  = data.get("data", [])
+    id_map   = {str(w.get("signedWaiverId", w.get("id",""))): w for w in waivers}
+    enriched = []
+    for w in waivers:
+        entry = {
+            "signedWaiverId":  w.get("signedWaiverId") or w.get("id"),
+            "customerId":      w.get("customerId"),
+            "firstName":       w.get("firstName",""),
+            "lastName":        w.get("lastName",""),
+            "email":           w.get("email",""),
+            "phone":           w.get("phone",""),
+            "dateOfBirth":     w.get("dateOfBirth",""),
+            "waiverName":      w.get("waiverName") or w.get("name",""),
+            "signedAt":        w.get("signedAt") or w.get("createdAt",""),
+            "isMinor":         False,
+            "parentFirstName": "",
+            "parentLastName":  "",
+            "parentEmail":     "",
+            "customFields":    w.get("customFields") or w.get("fields") or {},
+        }
+        parent_id = str(w.get("parentSignedWaiverId",""))
+        if parent_id and parent_id != "None":
+            entry["isMinor"] = True
+            parent = id_map.get(parent_id, {})
+            entry["parentFirstName"] = parent.get("firstName","")
+            entry["parentLastName"]  = parent.get("lastName","")
+            entry["parentEmail"]     = parent.get("email","")
+        enriched.append(entry)
+    return jsonify({"total": len(enriched), "data": enriched})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — misc (live only)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/products")
+@handle_errors
+def get_products():
+    if DEMO_MODE:
+        return jsonify({"message": "Demo mode — connect Roller API for live products", "data": []})
+    return jsonify(roller_get("/data/products", {"venueId": ROLLER_VENUE_ID, "pageSize": 500}))
+
+
+@app.route("/api/waiver-forms")
+@handle_errors
+def get_waiver_forms():
+    if DEMO_MODE:
+        return jsonify({"message": "Demo mode", "data": []})
+    return jsonify(roller_get("/data/waivers", {"venueId": ROLLER_VENUE_ID}))
+
+
+@app.route("/api/membership-redemptions")
+@handle_errors
+def get_redemptions():
+    if DEMO_MODE:
+        return jsonify({"message": "Demo mode", "data": []})
+    params = {"venueId": ROLLER_VENUE_ID, "pageSize": 500}
+    since  = request.args.get("since","")
+    if since:
+        params["modifiedSince"] = since
+    return jsonify(roller_get("/data/membershipredemptions", params))
+
+
+@app.route("/api/config")
+def get_config():
+    return jsonify({
+        "mode":      "demo" if DEMO_MODE else "live",
+        "pluFilter": MEMBERSHIP_PLUS,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Run
+# ─────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    mode = "DEMO MODE (no Roller API calls)" if DEMO_MODE else f"LIVE (Venue: {ROLLER_VENUE_ID})"
+    print(f"\n🚣  Rowing Roster Dashboard — {mode}")
+    print(f"    URL: http://localhost:{PORT}\n")
+    app.run(host="0.0.0.0", port=PORT, debug=False)
