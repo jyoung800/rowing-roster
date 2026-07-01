@@ -43,8 +43,8 @@ MEMBERSHIP_PLUS = [p.strip() for p in _plu_env.split(",") if p.strip()]
 
 PLU_FIELD_CANDIDATES = ("plu", "productCode", "sku", "productPlu", "externalId", "barcode")
 
-ROLLER_TOKEN_URL = "https://auth.roller.app/oauth/token"
-ROLLER_DATA_API  = "https://data.roller.app"
+ROLLER_TOKEN_URL = "https://api.roller.app/token"
+ROLLER_DATA_API  = "https://api.roller.app"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Demo data — realistic sample roster for testing
@@ -178,8 +178,6 @@ def get_access_token() -> str:
     resp = requests.post(ROLLER_TOKEN_URL, json={
         "client_id":     ROLLER_CLIENT_ID,
         "client_secret": ROLLER_CLIENT_SECRET,
-        "audience":      "https://data.roller.app",
-        "grant_type":    "client_credentials",
     }, timeout=10)
     resp.raise_for_status()
     data = resp.json()
