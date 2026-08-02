@@ -17,6 +17,10 @@ Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
 import os
 import re
 import time
+import netrc  # noqa: F401 -- pre-import before any threads exist. `requests`
+              # lazily imports this on first use to check for .netrc creds
+              # (which we never use); two threads racing to import it for the
+              # first time concurrently can deadlock (observed on Python 3.14).
 import threading
 import requests
 from datetime import datetime, timezone, date, timedelta
