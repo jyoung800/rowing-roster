@@ -450,6 +450,31 @@ def ensure_roster_fresh():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Diagnostic — a single fast, timed round-trip to Roller, to isolate network
+# issues from the (much slower) background backfill.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/diag")
+def diag():
+    if DEMO_MODE:
+        return jsonify({"message": "Demo mode"})
+    steps = {}
+    t0 = time.time()
+    try:
+        token = get_access_token()
+        steps["token"] = {"ok": True, "seconds": round(time.time() - t0, 2), "token_len": len(token)}
+    except Exception as e:
+        steps["token"] = {"ok": False, "seconds": round(time.time() - t0, 2), "error": str(e)}
+        return jsonify(steps), 200
+    t1 = time.time()
+    try:
+        events = roller_get("/data/membershipstatuses", {"date": datetime.now(timezone.utc).date().isoformat()}, timeout=10)
+        steps["single_day_scan"] = {"ok": True, "seconds": round(time.time() - t1, 2), "event_count": len(events or [])}
+    except Exception as e:
+        steps["single_day_scan"] = {"ok": False, "seconds": round(time.time() - t1, 2), "error": str(e)}
+    return jsonify(steps)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Error decorator
 # ─────────────────────────────────────────────────────────────────────────────
 def handle_errors(f):
