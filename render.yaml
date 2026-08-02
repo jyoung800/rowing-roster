@@ -9,7 +9,7 @@ services:
     name: rowing-roster
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --workers 2
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     envVars:
       - key: ROLLER_CLIENT_ID
         sync: false          # set this in the Render dashboard

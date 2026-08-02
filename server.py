@@ -17,8 +17,9 @@ Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
 import os
 import re
 import time
+import threading
 import requests
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from functools import wraps
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -41,10 +42,20 @@ PORT                 = int(os.getenv("PORT", 5050))
 _plu_env        = os.getenv("MEMBERSHIP_PLUS", "8565,8572,8573,8574,8575,8579,9528,9529,9530,9531,9547,9548,9549,9550")
 MEMBERSHIP_PLUS = [p.strip() for p in _plu_env.split(",") if p.strip()]
 
-PLU_FIELD_CANDIDATES = ("plu", "productCode", "sku", "productPlu", "externalId", "barcode")
-
 ROLLER_TOKEN_URL = "https://api.roller.app/token"
 ROLLER_DATA_API  = "https://api.roller.app"
+
+# Roller's Data API has no "current members" snapshot — /data/membershipstatuses
+# is a per-day changelog of status transitions. LOOKBACK_DAYS controls how far
+# back the one-time historical scan looks to catch every booking that might
+# still be currently active (e.g. a Full Year membership bought months ago).
+LOOKBACK_DAYS     = int(os.getenv("LOOKBACK_DAYS", "180"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(6 * 3600)))
+
+# Membership statuses (from Roller's docs, plus our own "active" demo-data
+# convention) that count as "currently active" when a membership's name has
+# no season keyword to override with.
+ACTIVE_ROLLER_STATUSES = {"active", "current", "renewed", "groupmembership", "pending pause"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Demo data — realistic sample roster for testing
@@ -160,9 +171,10 @@ def resolve_status(membership_name: str, start_date_str, roller_status: str, tod
     """Returns (effective_status, schedule_window_or_None)."""
     today = today or datetime.now(timezone.utc).date()
     schedule = compute_schedule(membership_name, start_date_str, today)
-    if schedule is None:
-        return (roller_status or "").lower(), None
-    return ("active" if schedule["active"] else "inactive"), schedule["window"]
+    if schedule is not None:
+        return ("active" if schedule["active"] else "inactive"), schedule["window"]
+    normalized = (roller_status or "").strip().lower()
+    return ("active" if normalized in ACTIVE_ROLLER_STATUSES else "inactive"), None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,22 +198,195 @@ def get_access_token() -> str:
     return _token_cache["token"]
 
 
-def roller_get(path: str, params: dict | None = None) -> dict:
+def roller_get(path: str, params: dict | None = None, timeout: int = 15):
+    """GET against api.roller.app with auto token-refresh on 401. Returns
+    parsed JSON (dict or list, depending on the endpoint) or None on 404."""
     token = get_access_token()
     for attempt in range(2):
         resp = requests.get(
             f"{ROLLER_DATA_API}{path}",
             headers={"Authorization": f"Bearer {token}"},
             params=params,
-            timeout=15,
+            timeout=timeout,
         )
         if resp.status_code == 401 and attempt == 0:
             _token_cache["token"] = None
             token = get_access_token()
             continue
+        if resp.status_code == 404:
+            return None
         resp.raise_for_status()
         return resp.json()
-    return {}
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Roster cache (live mode)
+#
+# Roller's Data API has no "give me current members" endpoint — the only
+# membership-related data it exposes is a per-day changelog. So the pipeline
+# is:
+#   1. DISCOVER — scan /data/membershipstatuses?date=X and /data/signedwaivers
+#      ?date=X across LOOKBACK_DAYS days to find every bookingReference that's
+#      ever had a membership event, and every signed waiver.
+#   2. ENRICH — for each discovered booking, call /bookings/{ref} directly
+#      (no date needed) to get the LIVE current status, ticket holder, product,
+#      and expiry — then /customers/{id} for contact info.
+#   3. FILTER — keep only tickets whose product matches one of our PLUs (PLU
+#      is parsed from the product name, e.g. "8573|40 ... SPRING SEMESTER").
+# This is too slow to run per-request, so results are cached in memory and
+# refreshed in the background when stale.
+# ─────────────────────────────────────────────────────────────────────────────
+_cache_lock = threading.Lock()
+_roster_cache = {
+    "members":          [],
+    "waivers":          [],
+    "known_booking_refs": set(),
+    "scanned_through":  None,   # date — last day included in the discovery scan
+    "products_by_id":   {},     # productId(str) -> {"plu": str, "name": str}
+    "products_loaded_at": 0.0,
+    "built_at":          0.0,
+    "refreshing":        False,
+    "last_error":        None,
+}
+
+
+def load_product_catalog(force: bool = False):
+    if not force and _roster_cache["products_by_id"] and time.time() - _roster_cache["products_loaded_at"] < 24 * 3600:
+        return
+    catalog = roller_get("/products", timeout=30) or []
+    mapping = {}
+    for parent in catalog:
+        for variant in parent.get("products", []):
+            vid  = str(variant.get("id", ""))
+            name = variant.get("name") or parent.get("name") or ""
+            match = re.match(r"^(\d+)\|\S*\s*(.*)$", name)
+            if match:
+                plu, readable = match.group(1), match.group(2).strip() or name
+            else:
+                plu, readable = "", name
+            if vid:
+                mapping[vid] = {"plu": plu, "name": readable}
+    _roster_cache["products_by_id"]   = mapping
+    _roster_cache["products_loaded_at"] = time.time()
+
+
+def _scan_changelog_day(d: date):
+    """One day of both changelogs. Tolerates a single bad day (network hiccup,
+    transient error) so it doesn't stall the whole backfill."""
+    try:
+        events = roller_get("/data/membershipstatuses", {"date": d.isoformat()}) or []
+        for e in events:
+            ref = e.get("bookingReference")
+            if ref:
+                _roster_cache["known_booking_refs"].add(str(ref))
+    except requests.RequestException:
+        pass
+    try:
+        waivers = roller_get("/data/signedwaivers", {"date": d.isoformat()}) or []
+        for w in waivers:
+            _roster_cache["waivers"].append(w)
+    except requests.RequestException:
+        pass
+
+
+def _discover_membership_bookings():
+    today = datetime.now(timezone.utc).date()
+    scanned_through = _roster_cache["scanned_through"]
+    start_day = (today - timedelta(days=LOOKBACK_DAYS)) if scanned_through is None else (scanned_through + timedelta(days=1))
+    if scanned_through is not None and start_day > today:
+        return  # already fully scanned through today
+    d = start_day
+    while d <= today:
+        _scan_changelog_day(d)
+        d += timedelta(days=1)
+    _roster_cache["scanned_through"] = today
+
+
+def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, customer: dict, today: date):
+    cid = str(ticket.get("customerId") or customer.get("customerId") or "")
+    first = customer.get("firstName", "")
+    last  = customer.get("lastName", "")
+    full_name = f"{first} {last}".strip() or ticket.get("ticketHolderName") or ticket.get("name") or "Unknown"
+
+    effective_status, window = resolve_status(
+        product["name"], item.get("bookingDate"), ticket.get("membershipStatus", ""), today
+    )
+    return {
+        "memberId":       cid or ticket.get("ticketId", ""),
+        "firstName":      first,
+        "lastName":       last,
+        "fullName":       full_name,
+        "email":          customer.get("email", ""),
+        "phone":          customer.get("phone", ""),
+        "membershipName": product["name"],
+        "status":         effective_status,
+        "rollerStatus":   ticket.get("membershipStatus", ""),
+        "scheduleWindow": window,
+        "startDate":      item.get("bookingDate", ""),
+        "endDate":         item.get("bookingEndDate", ""),
+        "plu":            product["plu"],
+        "hasWaiver":      bool(ticket.get("signedWaiverId")),
+        "waiverDate":     None,
+        "bookingReference": ref,
+        "ticketId":       ticket.get("ticketId", ""),
+    }
+
+
+def _enrich_roster():
+    load_product_catalog()
+    today = datetime.now(timezone.utc).date()
+    customer_cache: dict = {}
+    roster = []
+    for ref in list(_roster_cache["known_booking_refs"]):
+        try:
+            booking = roller_get(f"/bookings/{ref}")
+        except requests.RequestException:
+            continue
+        if not booking:
+            continue
+        for item in booking.get("items", []):
+            pid = str(item.get("productId", ""))
+            product = _roster_cache["products_by_id"].get(pid)
+            if not product:
+                continue
+            if MEMBERSHIP_PLUS and product["plu"] not in MEMBERSHIP_PLUS:
+                continue
+            for ticket in item.get("tickets", []):
+                cid = str(ticket.get("customerId") or "")
+                if cid and cid not in customer_cache:
+                    try:
+                        customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
+                    except requests.RequestException:
+                        customer_cache[cid] = {}
+                customer = customer_cache.get(cid, {})
+                roster.append(_build_roster_entry(ref, item, ticket, product, customer, today))
+    roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
+    _roster_cache["members"] = roster
+
+
+def refresh_roster_cache():
+    if not _cache_lock.acquire(blocking=False):
+        return  # a refresh is already running
+    try:
+        _roster_cache["refreshing"] = True
+        _discover_membership_bookings()
+        _enrich_roster()
+        _roster_cache["built_at"]   = time.time()
+        _roster_cache["last_error"] = None
+    except Exception as e:
+        _roster_cache["last_error"] = str(e)
+    finally:
+        _roster_cache["refreshing"] = False
+        _cache_lock.release()
+
+
+def ensure_roster_fresh():
+    """Serves instantly from cache; kicks off a background refresh if stale
+    (or if this is the very first request) without blocking the response."""
+    is_stale = time.time() - _roster_cache["built_at"] > CACHE_TTL_SECONDS
+    if is_stale and not _roster_cache["refreshing"]:
+        threading.Thread(target=refresh_roster_cache, daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,12 +411,37 @@ def handle_errors(f):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/health")
 def health():
+    cache_info = {} if DEMO_MODE else {
+        "cache_built_at":  datetime.fromtimestamp(_roster_cache["built_at"], tz=timezone.utc).isoformat() if _roster_cache["built_at"] else None,
+        "cache_refreshing": _roster_cache["refreshing"],
+        "cache_member_count": len(_roster_cache["members"]),
+        "scanned_through": _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
+        "last_error":      _roster_cache["last_error"],
+    }
     return jsonify({
         "status":      "ok",
         "mode":        "demo" if DEMO_MODE else "live",
         "venue_id":    ROLLER_VENUE_ID or "(demo)",
         "plu_filter":  MEMBERSHIP_PLUS,
         "plu_count":   len(MEMBERSHIP_PLUS),
+        **cache_info,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — force a cache refresh (blocks until done — can take a couple minutes
+# on a cold cache since it's scanning LOOKBACK_DAYS of changelog history)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/refresh", methods=["POST"])
+@handle_errors
+def refresh():
+    if DEMO_MODE:
+        return jsonify({"message": "Demo mode — nothing to refresh"})
+    refresh_roster_cache()
+    return jsonify({
+        "built_at": _roster_cache["built_at"],
+        "member_count": len(_roster_cache["members"]),
+        "error": _roster_cache["last_error"],
     })
 
 
@@ -241,9 +451,8 @@ def health():
 @app.route("/api/summary")
 @handle_errors
 def get_summary():
-    today = datetime.now(timezone.utc).date()
-
     if DEMO_MODE:
+        today = datetime.now(timezone.utc).date()
         active = sum(
             1 for m in DEMO_MEMBERS_DATA
             if resolve_status(m["membershipName"], m.get("startDate"), m["status"], today)[0] == "active"
@@ -256,22 +465,15 @@ def get_summary():
             "asOf":            datetime.now(timezone.utc).isoformat(),
         })
 
-    membership_data = roller_get("/data/membershipstatuses", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
-    memberships = membership_data.get("data", [])
-    if MEMBERSHIP_PLUS:
-        memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
-
-    active = sum(
-        1 for m in memberships
-        if resolve_status(m.get("membershipName"), m.get("startDate"), m.get("status",""), today)[0] == "active"
-    )
-    waiver_data  = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1})
+    ensure_roster_fresh()
+    members = _roster_cache["members"]
+    active  = sum(1 for m in members if m["status"] == "active")
     return jsonify({
         "activeMembers":   active,
-        "inactiveMembers": len(memberships) - active,
-        "totalMembers":    len(memberships),
-        "signedWaivers":   waiver_data.get("total", 0),
-        "asOf":            datetime.now(timezone.utc).isoformat(),
+        "inactiveMembers": len(members) - active,
+        "totalMembers":    len(members),
+        "signedWaivers":   len(_roster_cache["waivers"]),
+        "asOf":            datetime.fromtimestamp(_roster_cache["built_at"], tz=timezone.utc).isoformat() if _roster_cache["built_at"] else None,
     })
 
 
@@ -294,72 +496,15 @@ def get_members():
             entry["status"]         = effective_status
             entry["scheduleWindow"] = window
             roster.append(entry)
-        if status_filter != "all":
-            roster = [m for m in roster if m["status"] == status_filter]
-        if search:
-            roster = [m for m in roster if search in m["fullName"].lower() or search in m["email"].lower()]
-        roster = sorted(roster, key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
-        return jsonify({"total": len(roster), "status": status_filter, "data": roster})
-
-    # Live mode
-    membership_data = roller_get("/data/membershipstatuses", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
-    memberships     = membership_data.get("data", [])
-    if MEMBERSHIP_PLUS:
-        memberships = [m for m in memberships if any(str(m.get(f,"")) in MEMBERSHIP_PLUS for f in PLU_FIELD_CANDIDATES)]
-
-    customer_data = roller_get("/data/customers", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
-    customer_map  = {str(c["customerId"]): c for c in customer_data.get("data", [])}
-
-    roster = []
-    for m in memberships:
-        cid      = str(m.get("customerId",""))
-        customer = customer_map.get(cid, {})
-        first    = customer.get("firstName","")
-        last     = customer.get("lastName","")
-        full_name = f"{first} {last}".strip() or f"Member {cid}"
-        if search and search not in full_name.lower() and search not in customer.get("email","").lower():
-            continue
-        effective_status, window = resolve_status(m.get("membershipName"), m.get("startDate"), m.get("status",""), today)
-        roster.append({
-            "memberId":        cid,
-            "firstName":       first,
-            "lastName":        last,
-            "fullName":        full_name,
-            "email":           customer.get("email",""),
-            "phone":           customer.get("phone",""),
-            "dateOfBirth":     customer.get("dateOfBirth",""),
-            "membershipName":  m.get("membershipName",""),
-            "membershipType":  m.get("membershipType",""),
-            "status":          effective_status,
-            "rollerStatus":    m.get("status",""),
-            "scheduleWindow":  window,
-            "startDate":       m.get("startDate",""),
-            "endDate":         m.get("endDate",""),
-            "nextBillingDate": m.get("nextBillingDate",""),
-            "plu":             next((str(m.get(f)) for f in PLU_FIELD_CANDIDATES if m.get(f)), ""),
-            "hasWaiver":       False,
-            "waiverDate":      None,
-        })
+    else:
+        ensure_roster_fresh()
+        roster = [dict(m) for m in _roster_cache["members"]]
 
     if status_filter != "all":
         roster = [m for m in roster if m["status"] == status_filter]
-
-    try:
-        waiver_data = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 1000})
-        waiver_map  = {}
-        for w in waiver_data.get("data", []):
-            cid_w = str(w.get("customerId",""))
-            date  = w.get("signedAt") or w.get("createdAt") or ""
-            if cid_w not in waiver_map or date > waiver_map[cid_w]:
-                waiver_map[cid_w] = date
-        for entry in roster:
-            if entry["memberId"] in waiver_map:
-                entry["hasWaiver"]  = True
-                entry["waiverDate"] = waiver_map[entry["memberId"]]
-    except Exception:
-        pass
-
-    roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
+    if search:
+        roster = [m for m in roster if search in m["fullName"].lower() or search in m["email"].lower()]
+    roster = sorted(roster, key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
     return jsonify({"total": len(roster), "status": status_filter, "data": roster})
 
 
@@ -372,67 +517,50 @@ def get_waivers():
     if DEMO_MODE:
         return jsonify({"total": len(DEMO_WAIVERS_DATA), "data": DEMO_WAIVERS_DATA})
 
-    data     = roller_get("/data/signedwaivers", {"venueId": ROLLER_VENUE_ID, "pageSize": 500})
-    waivers  = data.get("data", [])
-    id_map   = {str(w.get("signedWaiverId", w.get("id",""))): w for w in waivers}
+    ensure_roster_fresh()
+    waivers  = _roster_cache["waivers"]
+    id_map   = {str(w.get("signedWaiverId", w.get("id", ""))): w for w in waivers}
     enriched = []
     for w in waivers:
         entry = {
             "signedWaiverId":  w.get("signedWaiverId") or w.get("id"),
             "customerId":      w.get("customerId"),
-            "firstName":       w.get("firstName",""),
-            "lastName":        w.get("lastName",""),
-            "email":           w.get("email",""),
-            "phone":           w.get("phone",""),
-            "dateOfBirth":     w.get("dateOfBirth",""),
-            "waiverName":      w.get("waiverName") or w.get("name",""),
-            "signedAt":        w.get("signedAt") or w.get("createdAt",""),
-            "isMinor":         False,
+            "firstName":       w.get("firstName", ""),
+            "lastName":        w.get("lastName", ""),
+            "email":           w.get("email", ""),
+            "phone":           w.get("phone") or w.get("contactNumber", ""),
+            "dateOfBirth":     w.get("dateOfBirth", ""),
+            "waiverName":      w.get("waiverName") or w.get("name", ""),
+            "signedAt":        w.get("signedAt") or w.get("createdAt", ""),
+            "isMinor":         bool(w.get("isForMinor")),
             "parentFirstName": "",
             "parentLastName":  "",
             "parentEmail":     "",
             "customFields":    w.get("customFields") or w.get("fields") or {},
         }
-        parent_id = str(w.get("parentSignedWaiverId",""))
+        parent_id = str(w.get("parentSignedWaiverId", ""))
         if parent_id and parent_id != "None":
-            entry["isMinor"] = True
             parent = id_map.get(parent_id, {})
-            entry["parentFirstName"] = parent.get("firstName","")
-            entry["parentLastName"]  = parent.get("lastName","")
-            entry["parentEmail"]     = parent.get("email","")
+            entry["parentFirstName"] = parent.get("firstName", "")
+            entry["parentLastName"]  = parent.get("lastName", "")
+            entry["parentEmail"]     = parent.get("email", "")
         enriched.append(entry)
     return jsonify({"total": len(enriched), "data": enriched})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# API — misc (live only)
+# API — misc
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/products")
 @handle_errors
 def get_products():
     if DEMO_MODE:
         return jsonify({"message": "Demo mode — connect Roller API for live products", "data": []})
-    return jsonify(roller_get("/data/products", {"venueId": ROLLER_VENUE_ID, "pageSize": 500}))
-
-
-@app.route("/api/waiver-forms")
-@handle_errors
-def get_waiver_forms():
-    if DEMO_MODE:
-        return jsonify({"message": "Demo mode", "data": []})
-    return jsonify(roller_get("/data/waivers", {"venueId": ROLLER_VENUE_ID}))
-
-
-@app.route("/api/membership-redemptions")
-@handle_errors
-def get_redemptions():
-    if DEMO_MODE:
-        return jsonify({"message": "Demo mode", "data": []})
-    params = {"venueId": ROLLER_VENUE_ID, "pageSize": 500}
-    since  = request.args.get("since","")
-    if since:
-        params["modifiedSince"] = since
-    return jsonify(roller_get("/data/membershipredemptions", params))
+    load_product_catalog()
+    return jsonify({
+        "total": len(_roster_cache["products_by_id"]),
+        "data": [{"productId": pid, **info} for pid, info in _roster_cache["products_by_id"].items()],
+    })
 
 
 @app.route("/api/config")
@@ -441,6 +569,12 @@ def get_config():
         "mode":      "demo" if DEMO_MODE else "live",
         "pluFilter": MEMBERSHIP_PLUS,
     })
+
+
+# Warm the cache in the background as soon as the process starts (works under
+# both `python server.py` and gunicorn, since this runs at import time).
+if not DEMO_MODE:
+    threading.Thread(target=refresh_roster_cache, daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
