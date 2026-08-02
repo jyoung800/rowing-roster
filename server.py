@@ -318,22 +318,53 @@ def _discover_membership_bookings():
         d += timedelta(days=1)
 
 
-def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, customer: dict, booking_name: str, today: date):
-    cid = str(ticket.get("customerId") or customer.get("customerId") or "")
-    first = customer.get("firstName", "")
-    last  = customer.get("lastName", "")
-    full_name = f"{first} {last}".strip() or ticket.get("ticketHolderName") or ticket.get("name") or booking_name or "Unknown"
+def _clean_booking_name(name: str) -> str:
+    """Booking names sometimes carry extra descriptive text, e.g.
+    "Madeline Glover- FA Annual Membership" -> "Madeline Glover"."""
+    return re.split(r"\s*-\s*", name or "", maxsplit=1)[0].strip()
+
+
+def _split_name(full: str):
+    parts = full.split(None, 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (full, "")
+
+
+def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, ticket_customer: dict, booking_customer: dict, booking_name: str, today: date):
+    ticket_cid  = str(ticket_customer.get("customerId") or "")
+    booking_cid = str(booking_customer.get("customerId") or "")
+    resolved_name = f"{ticket_customer.get('firstName','')} {ticket_customer.get('lastName','')}".strip()
+
+    # A ticket with its own customerId usually means Roller has a real
+    # profile for the ticket holder (not just the purchaser) -- trust it.
+    # Otherwise the resolved customer is often the parent/purchaser, so
+    # prefer the ticket's own name fields or the booking's typed name
+    # (which is frequently the actual rower's name even on a parent's
+    # account) before falling back to the purchaser's name.
+    if ticket_cid and resolved_name:
+        first, last = ticket_customer.get("firstName", ""), ticket_customer.get("lastName", "")
+        full_name = resolved_name
+    else:
+        booking_resolved = f"{booking_customer.get('firstName','')} {booking_customer.get('lastName','')}".strip()
+        name_source = ticket.get("ticketHolderName") or ticket.get("name") or _clean_booking_name(booking_name) or booking_resolved
+        full_name = name_source or "Unknown"
+        first, last = _split_name(full_name) if full_name != "Unknown" else ("", "")
+
+    # The ticket holder's own profile (a minor) often lacks contact info --
+    # fall back to the purchaser's (usually a parent), which is who a coach
+    # would want to reach anyway.
+    email = ticket_customer.get("email") or booking_customer.get("email", "")
+    phone = ticket_customer.get("phone") or booking_customer.get("phone", "")
 
     effective_status, window = resolve_status(
         product["name"], item.get("bookingDate"), ticket.get("membershipStatus", ""), today
     )
     return {
-        "memberId":       cid or ticket.get("ticketId", ""),
+        "memberId":       ticket_cid or booking_cid or ticket.get("ticketId", ""),
         "firstName":      first,
         "lastName":       last,
         "fullName":       full_name,
-        "email":          customer.get("email", ""),
-        "phone":          customer.get("phone", ""),
+        "email":          email,
+        "phone":          phone,
         "membershipName": product["name"],
         "status":         effective_status,
         "rollerStatus":   ticket.get("membershipStatus", ""),
@@ -362,6 +393,18 @@ def _enrich_roster():
             continue
         booking_cid  = str(booking.get("customerId") or "")
         booking_name = booking.get("name", "")
+
+        def fetch_customer(cid: str) -> dict:
+            if not cid:
+                return {}
+            if cid not in customer_cache:
+                try:
+                    customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
+                except requests.RequestException:
+                    customer_cache[cid] = {}
+            return customer_cache[cid]
+
+        booking_customer = fetch_customer(booking_cid)
         for item in booking.get("items", []):
             pid = str(item.get("productId", ""))
             product = _roster_cache["products_by_id"].get(pid)
@@ -370,17 +413,14 @@ def _enrich_roster():
             if MEMBERSHIP_PLUS and product["plu"] not in MEMBERSHIP_PLUS:
                 continue
             for ticket in item.get("tickets", []):
-                # Membership tickets often don't carry their own customerId or
-                # ticketHolderName — the booking itself is who the membership
-                # belongs to (a booking = one member's purchase).
-                cid = str(ticket.get("customerId") or "") or booking_cid
-                if cid and cid not in customer_cache:
-                    try:
-                        customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
-                    except requests.RequestException:
-                        customer_cache[cid] = {}
-                customer = customer_cache.get(cid, {})
-                roster.append(_build_roster_entry(ref, item, ticket, product, customer, booking_name, today))
+                # Membership tickets often don't carry their own customerId,
+                # and even when they do, that profile (the actual rower --
+                # frequently a minor) may lack contact info. Resolve both the
+                # ticket's own customer and the booking's purchaser so name
+                # and contact info can be picked independently.
+                ticket_cid = str(ticket.get("customerId") or "")
+                ticket_customer = fetch_customer(ticket_cid) if ticket_cid else {}
+                roster.append(_build_roster_entry(ref, item, ticket, product, ticket_customer, booking_customer, booking_name, today))
     roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
     _roster_cache["members"] = roster
 
