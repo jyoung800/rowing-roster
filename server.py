@@ -273,7 +273,12 @@ def load_product_catalog(force: bool = False):
 
 def _scan_changelog_day(d: date):
     """One day of both changelogs. Tolerates a single bad day (network hiccup,
-    transient error) so it doesn't stall the whole backfill."""
+    transient error) so it doesn't stall the whole backfill.
+
+    /data/membershipstatuses takes a single `date` and returns a bare array.
+    /data/signedwaivers takes a `startDate`/`endDate` 1-day span and returns
+    a paginated {"items": [...], "totalPages": N} wrapper — two different
+    conventions on the same API, confirmed against the live account."""
     try:
         events = roller_get("/data/membershipstatuses", {"date": d.isoformat()}) or []
         for e in events:
@@ -283,9 +288,17 @@ def _scan_changelog_day(d: date):
     except requests.RequestException:
         pass
     try:
-        waivers = roller_get("/data/signedwaivers", {"date": d.isoformat()}) or []
-        for w in waivers:
-            _roster_cache["waivers"].append(w)
+        next_day = d + timedelta(days=1)
+        page = 1
+        while True:
+            resp = roller_get("/data/signedwaivers", {
+                "startDate": d.isoformat(), "endDate": next_day.isoformat(), "page": page,
+            }) or {}
+            items = resp.get("items", [])
+            _roster_cache["waivers"].extend(items)
+            if page >= resp.get("totalPages", 0):
+                break
+            page += 1
     except requests.RequestException:
         pass
 
@@ -305,11 +318,11 @@ def _discover_membership_bookings():
         d += timedelta(days=1)
 
 
-def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, customer: dict, today: date):
+def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, customer: dict, booking_name: str, today: date):
     cid = str(ticket.get("customerId") or customer.get("customerId") or "")
     first = customer.get("firstName", "")
     last  = customer.get("lastName", "")
-    full_name = f"{first} {last}".strip() or ticket.get("ticketHolderName") or ticket.get("name") or "Unknown"
+    full_name = f"{first} {last}".strip() or ticket.get("ticketHolderName") or ticket.get("name") or booking_name or "Unknown"
 
     effective_status, window = resolve_status(
         product["name"], item.get("bookingDate"), ticket.get("membershipStatus", ""), today
@@ -347,6 +360,8 @@ def _enrich_roster():
             continue
         if not booking:
             continue
+        booking_cid  = str(booking.get("customerId") or "")
+        booking_name = booking.get("name", "")
         for item in booking.get("items", []):
             pid = str(item.get("productId", ""))
             product = _roster_cache["products_by_id"].get(pid)
@@ -355,14 +370,17 @@ def _enrich_roster():
             if MEMBERSHIP_PLUS and product["plu"] not in MEMBERSHIP_PLUS:
                 continue
             for ticket in item.get("tickets", []):
-                cid = str(ticket.get("customerId") or "")
+                # Membership tickets often don't carry their own customerId or
+                # ticketHolderName — the booking itself is who the membership
+                # belongs to (a booking = one member's purchase).
+                cid = str(ticket.get("customerId") or "") or booking_cid
                 if cid and cid not in customer_cache:
                     try:
                         customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
                     except requests.RequestException:
                         customer_cache[cid] = {}
                 customer = customer_cache.get(cid, {})
-                roster.append(_build_roster_entry(ref, item, ticket, product, customer, today))
+                roster.append(_build_roster_entry(ref, item, ticket, product, customer, booking_name, today))
     roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
     _roster_cache["members"] = roster
 
@@ -533,8 +551,9 @@ def get_waivers():
             "email":           w.get("email", ""),
             "phone":           w.get("phone") or w.get("contactNumber", ""),
             "dateOfBirth":     w.get("dateOfBirth", ""),
-            "waiverName":      w.get("waiverName") or w.get("name", ""),
-            "signedAt":        w.get("signedAt") or w.get("createdAt", ""),
+            "waiverId":        w.get("waiverId", ""),
+            "signedAt":        w.get("signedAt") or w.get("createdDate") or w.get("createdAt", ""),
+            "expiryDate":      w.get("expiryDate", ""),
             "isMinor":         bool(w.get("isForMinor")),
             "parentFirstName": "",
             "parentLastName":  "",
