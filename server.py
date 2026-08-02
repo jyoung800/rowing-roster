@@ -299,8 +299,10 @@ def _discover_membership_bookings():
     d = start_day
     while d <= today:
         _scan_changelog_day(d)
+        # Checkpoint after every day so a slow/interrupted backfill doesn't
+        # have to restart from scratch, and progress is visible in /api/health.
+        _roster_cache["scanned_through"] = d
         d += timedelta(days=1)
-    _roster_cache["scanned_through"] = today
 
 
 def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, customer: dict, today: date):
@@ -415,6 +417,7 @@ def health():
         "cache_built_at":  datetime.fromtimestamp(_roster_cache["built_at"], tz=timezone.utc).isoformat() if _roster_cache["built_at"] else None,
         "cache_refreshing": _roster_cache["refreshing"],
         "cache_member_count": len(_roster_cache["members"]),
+        "known_bookings_discovered": len(_roster_cache["known_booking_refs"]),
         "scanned_through": _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
         "last_error":      _roster_cache["last_error"],
     }
