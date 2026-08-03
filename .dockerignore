@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+.claude
+__pycache__
+*.pyc
+roster_cache.json
+*_snapshot.json
+roster.csv
+waivers.csv
+server_local.log
+README.md
