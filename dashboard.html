@@ -260,7 +260,7 @@ td.tc { text-align:center; }
   padding:9px 13px; font-size:12px; color:var(--blue); margin-bottom:14px; line-height:1.5;
 }
 
-/* ── My Rosters ──────────────────────────────────────────── */
+/* ── Team Rosters ──────────────────────────────────────────── */
 .myrosters-layout { display:grid; grid-template-columns:260px 1fr; gap:16px; align-items:start; }
 .myrosters-list {
   background:#fff; border-radius:var(--r); box-shadow:var(--sh); padding:14px;
@@ -343,10 +343,10 @@ td.tc { text-align:center; }
 
 <!-- Tab row — always visible -->
 <div class="tab-row">
-  <div class="tab active" onclick="switchTab('roster')">📋 Roster</div>
+  <div class="tab active" onclick="switchTab('roster')">📋 All Members</div>
   <div class="tab"        onclick="switchTab('waivers')">📄 Waivers</div>
   <div class="tab"        onclick="switchTab('log')">✅ Attendance Log</div>
-  <div class="tab"        onclick="switchTab('myrosters')">🗂 My Rosters</div>
+  <div class="tab"        onclick="switchTab('myrosters')">🗂 Team Rosters</div>
 </div>
 
 <!-- Filter toolbar — only shown on Roster tab -->
@@ -400,7 +400,7 @@ td.tc { text-align:center; }
       <div class="empty">
         <div class="icon">📋</div>
         <strong>No sessions recorded yet</strong>
-        <p>Open a roster under My Rosters to start an attendance session.</p>
+        <p>Open a roster under Team Rosters to start an attendance session.</p>
       </div>
     </div>
   </div>
@@ -410,7 +410,7 @@ td.tc { text-align:center; }
     <div class="myrosters-layout">
       <div class="myrosters-list">
         <div class="myrosters-list-hdr">
-          <strong>My Rosters</strong>
+          <strong>Team Rosters</strong>
           <button class="btn btn-primary btn-sm" onclick="openModal('roster-new-modal')">+ New</button>
         </div>
         <div id="roster-list-out"><div class="loader"><div class="spin"></div> Loading…</div></div>
@@ -822,7 +822,7 @@ function renderWaivers() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Attendance — taken against a My Rosters custom roster, not the
+// Attendance — taken against a Team Rosters custom roster, not the
 // full master roster.
 // ─────────────────────────────────────────────────────────────
 function startAttendanceForActiveRoster() {
@@ -956,7 +956,7 @@ document.addEventListener('click', e => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// My Rosters — coach-created custom rosters (shared, no login)
+// Team Rosters — coach-created custom rosters (shared, no login)
 // ─────────────────────────────────────────────────────────────
 async function loadRosters() {
   try {
