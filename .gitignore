@@ -3,6 +3,7 @@
 
 # Persisted roster cache and any exported snapshots -- contains real member PII, never commit
 roster_cache.json
+rosters.json
 *_snapshot.json
 roster.csv
 waivers.csv

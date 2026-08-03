@@ -260,6 +260,51 @@ td.tc { text-align:center; }
   padding:9px 13px; font-size:12px; color:var(--blue); margin-bottom:14px; line-height:1.5;
 }
 
+/* ── My Rosters ──────────────────────────────────────────── */
+.myrosters-layout { display:grid; grid-template-columns:260px 1fr; gap:16px; align-items:start; }
+.myrosters-list {
+  background:#fff; border-radius:var(--r); box-shadow:var(--sh); padding:14px;
+}
+.myrosters-list-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.roster-list-item {
+  padding:9px 10px; border-radius:8px; cursor:pointer; margin-bottom:4px;
+}
+.roster-list-item:hover { background:var(--g100); }
+.roster-list-item.active { background:var(--light); }
+.roster-list-name  { font-weight:600; font-size:13px; }
+.roster-list-count { font-size:11px; color:var(--g400); margin-top:1px; }
+.roster-detail-hdr {
+  display:flex; align-items:center; justify-content:space-between;
+  background:#fff; border-radius:var(--r); box-shadow:var(--sh); padding:16px; margin-bottom:12px;
+}
+.roster-detail-hdr h2 { font-size:17px; }
+.roster-member-list { background:#fff; border-radius:var(--r); box-shadow:var(--sh); overflow:hidden; }
+.roster-member-row {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 16px; border-bottom:1px solid var(--g100);
+}
+.roster-member-row:last-child { border-bottom:none; }
+.roster-member-chk  { flex-shrink:0; }
+.roster-member-info { flex:1; }
+.roster-member-name { font-weight:600; font-size:13px; }
+.roster-member-sub  { font-size:11px; color:var(--g400); margin-top:1px; }
+.b-manual { background:#fef9c3; color:#713f12; }
+.empty.small { padding:24px 12px; }
+.empty.small .icon { display:none; }
+
+.add-member-tabs { display:flex; gap:6px; margin-bottom:14px; }
+.am-picker { max-height:260px; overflow-y:auto; border:1px solid var(--g100); border-radius:8px; }
+.am-picker-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 12px; border-bottom:1px solid var(--g100);
+}
+.am-picker-row:last-child { border-bottom:none; }
+.am-picker-row.added { opacity:.6; }
+
+@media(max-width:680px){
+  .myrosters-layout { grid-template-columns:1fr; }
+}
+
 /* ── Responsive ──────────────────────────────────────────── */
 @media(max-width:680px){
   header,#filter-toolbar,.stats-bar,.main,#attend-banner,.tab-row { padding-left:14px; padding-right:14px; }
@@ -301,6 +346,7 @@ td.tc { text-align:center; }
   <div class="tab active" onclick="switchTab('roster')">📋 Roster</div>
   <div class="tab"        onclick="switchTab('waivers')">📄 Waivers</div>
   <div class="tab"        onclick="switchTab('log')">✅ Attendance Log</div>
+  <div class="tab"        onclick="switchTab('myrosters')">🗂 My Rosters</div>
 </div>
 
 <!-- Filter toolbar — only shown on Roster tab -->
@@ -318,7 +364,6 @@ td.tc { text-align:center; }
     <button class="fbtn" id="wav-btn" onclick="cycleWaiverFilter()">🔏 Waiver Status</button>
   </div>
   <div class="tbr-r">
-    <button class="btn btn-success"   id="attend-start-btn" onclick="openModal('session-modal')">📋 Start Attendance</button>
     <button class="btn btn-secondary" onclick="exportCSV()">⬇ Export CSV</button>
     <div class="view-toggle">
       <button class="vbtn active" id="vt" title="Table" onclick="setView('table')">☰</button>
@@ -355,7 +400,27 @@ td.tc { text-align:center; }
       <div class="empty">
         <div class="icon">📋</div>
         <strong>No sessions recorded yet</strong>
-        <p>Use the Roster tab to start an attendance session.</p>
+        <p>Open a roster under My Rosters to start an attendance session.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MY ROSTERS PANEL -->
+  <div id="panel-myrosters" class="panel">
+    <div class="myrosters-layout">
+      <div class="myrosters-list">
+        <div class="myrosters-list-hdr">
+          <strong>My Rosters</strong>
+          <button class="btn btn-primary btn-sm" onclick="openModal('roster-new-modal')">+ New</button>
+        </div>
+        <div id="roster-list-out"><div class="loader"><div class="spin"></div> Loading…</div></div>
+      </div>
+      <div class="myrosters-detail" id="roster-detail-out">
+        <div class="empty">
+          <div class="icon">🗂</div>
+          <strong>No roster selected</strong>
+          <p>Pick a roster on the left, or create a new one.</p>
+        </div>
       </div>
     </div>
   </div>
@@ -407,6 +472,65 @@ td.tc { text-align:center; }
   </div>
 </div>
 
+<!-- ── New roster modal ─────────────────────────────────────── -->
+<div class="overlay" id="roster-new-modal">
+  <div class="modal">
+    <h2>🗂 New Roster</h2>
+    <p class="sub">Give it a name — e.g. a practice group, squad, or event.</p>
+    <div class="fg">
+      <label>Roster Name</label>
+      <input id="roster-new-name" placeholder="e.g. Varsity 8am Practice" />
+    </div>
+    <div class="modal-ftr">
+      <button class="btn btn-secondary" onclick="closeModal('roster-new-modal')">Cancel</button>
+      <button class="btn btn-primary"   onclick="createRoster()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add member modal ─────────────────────────────────────── -->
+<div class="overlay" id="roster-add-modal">
+  <div class="modal">
+    <h2>➕ Add to Roster</h2>
+    <div class="add-member-tabs">
+      <button class="fbtn active" id="am-tab-existing" onclick="setAddMemberMode('existing')">From Master Roster</button>
+      <button class="fbtn"        id="am-tab-manual"   onclick="setAddMemberMode('manual')">Add Someone New</button>
+    </div>
+
+    <div id="am-existing">
+      <div class="fg">
+        <label>Search</label>
+        <input id="am-search" placeholder="Search name or email…" oninput="renderMemberPicker()" />
+      </div>
+      <div id="am-picker-out" class="am-picker"></div>
+    </div>
+
+    <div id="am-manual" style="display:none">
+      <div class="fg">
+        <label>Full Name</label>
+        <input id="am-name" placeholder="e.g. Jordan Smith" />
+      </div>
+      <div class="fg">
+        <label>Email</label>
+        <input id="am-email" placeholder="optional" />
+      </div>
+      <div class="fg">
+        <label>Phone</label>
+        <input id="am-phone" placeholder="optional" />
+      </div>
+      <div class="fg">
+        <label>Notes</label>
+        <input id="am-notes" placeholder="optional" />
+      </div>
+    </div>
+
+    <div class="modal-ftr">
+      <button class="btn btn-secondary" onclick="closeModal('roster-add-modal')">Cancel</button>
+      <button class="btn btn-primary" id="am-manual-add" style="display:none" onclick="submitManualMember()">Add Person</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─────────────────────────────────────────────────────────────
 // State
@@ -421,6 +545,10 @@ let sortCol      = 'lastName';
 let sortAsc      = true;
 let session      = null;   // { name, date }
 let present      = new Set();
+let myRosters     = [];    // [{id, name, createdAt, memberCount}]
+let activeRosterId = null;
+let activeRosterDetail = null; // resolved roster (with members) once loaded
+let addMemberMode = 'existing';
 let log          = [];
 
 let cfg = {
@@ -539,11 +667,12 @@ function updatePresentCount() {
 // ─────────────────────────────────────────────────────────────
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab')[['roster','waivers','log'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.tab')[['roster','waivers','log','myrosters'].indexOf(name)].classList.add('active');
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   // Show filter toolbar only on roster tab
   document.getElementById('filter-toolbar').style.display = name === 'roster' ? 'flex' : 'none';
+  if (name === 'myrosters') loadRosters();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -604,13 +733,7 @@ function renderTable() {
   const rows = filtered.map(m => {
     const ini   = initials(m);
     const color = memberColor(m.memberId||m.fullName);
-    const chked = present.has(String(m.memberId)) ? 'checked' : '';
-    const dis   = session ? '' : 'disabled title="Start an attendance session first"';
     return `<tr>
-      <td class="tc">
-        <input type="checkbox" class="chk" ${chked} ${dis}
-          onchange="togglePresent('${m.memberId}',this.checked)"/>
-      </td>
       <td>
         <div class="mem-cell">
           <div class="avatar" style="background:${color}">${ini}</div>
@@ -632,7 +755,6 @@ function renderTable() {
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th style="width:38px">✓</th>
           <th ${sa('lastName')}>Name ${arrow('lastName')}</th>
           <th ${sa('membershipName')}>Membership ${arrow('membershipName')}</th>
           <th ${sa('status')}>Status ${arrow('status')}</th>
@@ -651,8 +773,6 @@ function renderGrid() {
   const cards = filtered.map(m => {
     const ini   = initials(m);
     const color = memberColor(m.memberId||m.fullName);
-    const chked = present.has(String(m.memberId));
-    const dis   = session ? '' : 'disabled';
     return `<div class="card">
       <div class="card-hdr">
         <div class="card-av" style="background:${color}">${ini}</div>
@@ -668,11 +788,6 @@ function renderGrid() {
       </div>
       <div class="card-ftr">
         <div class="card-badges">${statusBadge(m)} ${waiverBadge(m)}</div>
-        <label class="card-chk ${chked?'present':''}">
-          <input type="checkbox" ${chked?'checked':''} ${dis}
-            onchange="togglePresent('${m.memberId}',this.checked,this)"/>
-          ${chked?'Present':'Mark In'}
-        </label>
       </div>
     </div>`;
   }).join('');
@@ -707,46 +822,46 @@ function renderWaivers() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Attendance
+// Attendance — taken against a My Rosters custom roster, not the
+// full master roster.
 // ─────────────────────────────────────────────────────────────
+function startAttendanceForActiveRoster() {
+  if (!activeRosterDetail) return;
+  document.getElementById('sess-name-in').value = activeRosterDetail.name + ' — ' + new Date().toLocaleDateString();
+  openModal('session-modal');
+}
+
 function beginSession() {
+  if (!activeRosterDetail) return;
   const name = document.getElementById('sess-name-in').value.trim()
-    || 'Practice — ' + new Date().toLocaleDateString();
+    || activeRosterDetail.name + ' — ' + new Date().toLocaleDateString();
   const date = document.getElementById('sess-date-in').value || todayStr();
-  session = { name, date, started: new Date().toISOString() };
+  session = { name, date, rosterId: activeRosterDetail.id, rosterName: activeRosterDetail.name, started: new Date().toISOString() };
   present.clear();
   updatePresentCount();
 
   set('sess-name', name);
   document.getElementById('attend-banner').classList.add('on');
-  // Update start button to reflect active session
-  document.getElementById('attend-start-btn').textContent = '📋 Session Active';
-  document.getElementById('attend-start-btn').disabled = true;
 
   closeModal('session-modal');
-  // Switch to roster so coaches can check people in
-  switchTab('roster');
-  render(); // re-render to enable checkboxes
+  renderRosterDetail(); // re-render to show checkboxes
 }
 
-function togglePresent(id, checked, labelEl) {
+function togglePresent(id, checked) {
   if (checked) present.add(String(id));
   else         present.delete(String(id));
   updatePresentCount();
-  if (labelEl) {
-    const lbl = labelEl.closest('.card-chk');
-    if (lbl) { lbl.classList.toggle('present', checked); lbl.childNodes[lbl.childNodes.length-1].textContent = checked ? 'Present' : 'Mark In'; }
-  }
+  renderRosterDetail();
 }
 
 function saveSession() {
-  if (!session) return;
-  const attendedMembers = allMembers.filter(m => present.has(String(m.memberId)));
+  if (!session || !activeRosterDetail) return;
+  const attendedMembers = activeRosterDetail.members.filter(m => present.has(String(m.id)));
   const record = {
     ...session,
     saved: new Date().toISOString(),
     count: present.size,
-    members: attendedMembers.map(m => ({ memberId:m.memberId, name:m.fullName, email:m.email, membership:m.membershipName })),
+    members: attendedMembers.map(m => ({ memberId:m.id, name:m.fullName, email:m.email, membership:m.membershipName || '' })),
   };
   log.unshift(record);
   renderLog();
@@ -771,9 +886,7 @@ function endSession() {
   present.clear();
   updatePresentCount();
   document.getElementById('attend-banner').classList.remove('on');
-  document.getElementById('attend-start-btn').textContent = '📋 Start Attendance';
-  document.getElementById('attend-start-btn').disabled = false;
-  render();
+  renderRosterDetail();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -841,6 +954,191 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 document.addEventListener('click', e => {
   if (e.target.classList.contains('overlay')) e.target.classList.remove('open');
 });
+
+// ─────────────────────────────────────────────────────────────
+// My Rosters — coach-created custom rosters (shared, no login)
+// ─────────────────────────────────────────────────────────────
+async function loadRosters() {
+  try {
+    myRosters = await apiFetch('/api/rosters') || [];
+  } catch (e) {
+    myRosters = [];
+  }
+  renderRosterList();
+  if (activeRosterId && myRosters.some(r => r.id === activeRosterId)) {
+    selectRoster(activeRosterId);
+  }
+}
+
+function renderRosterList() {
+  const out = document.getElementById('roster-list-out');
+  if (!myRosters.length) {
+    out.innerHTML = `<div class="empty small"><p>No rosters yet.</p></div>`;
+    return;
+  }
+  out.innerHTML = myRosters.map(r => `
+    <div class="roster-list-item ${r.id === activeRosterId ? 'active' : ''}" onclick="selectRoster('${r.id}')">
+      <div class="roster-list-name">${esc(r.name)}</div>
+      <div class="roster-list-count">${r.memberCount} ${r.memberCount === 1 ? 'person' : 'people'}</div>
+    </div>
+  `).join('');
+}
+
+async function createRoster() {
+  const name = document.getElementById('roster-new-name').value.trim();
+  if (!name) return;
+  const roster = await apiFetch2('/api/rosters', 'POST', { name });
+  document.getElementById('roster-new-name').value = '';
+  closeModal('roster-new-modal');
+  await loadRosters();
+  if (roster && roster.id) selectRoster(roster.id);
+}
+
+async function selectRoster(id) {
+  activeRosterId = id;
+  renderRosterList();
+  activeRosterDetail = await apiFetch(`/api/rosters/${id}`);
+  renderRosterDetail();
+}
+
+async function deleteRosterConfirm() {
+  if (!activeRosterDetail) return;
+  if (!confirm(`Delete roster "${activeRosterDetail.name}"? This can't be undone.`)) return;
+  await apiFetch2(`/api/rosters/${activeRosterDetail.id}`, 'DELETE');
+  activeRosterId = null;
+  activeRosterDetail = null;
+  await loadRosters();
+  document.getElementById('roster-detail-out').innerHTML =
+    `<div class="empty"><div class="icon">🗂</div><strong>No roster selected</strong><p>Pick a roster on the left, or create a new one.</p></div>`;
+}
+
+function renderRosterDetail() {
+  const out = document.getElementById('roster-detail-out');
+  if (!activeRosterDetail) return;
+  const r = activeRosterDetail;
+  const sessionActive = session && session.rosterId === r.id;
+
+  const rows = r.members.length
+    ? r.members.map(m => {
+        const chked = present.has(String(m.id));
+        const checkbox = sessionActive
+          ? `<input type="checkbox" class="chk" ${chked?'checked':''}
+               onchange="togglePresent('${m.id}',this.checked)"/>`
+          : '';
+        return `
+        <div class="roster-member-row">
+          ${sessionActive ? `<div class="roster-member-chk">${checkbox}</div>` : ''}
+          <div class="roster-member-info">
+            <div class="roster-member-name">${esc(m.fullName)} ${m.kind === 'manual' ? '<span class="badge b-manual">Guest</span>' : ''}</div>
+            <div class="roster-member-sub">${esc(m.email || '')} ${m.phone ? ' · ' + esc(m.phone) : ''}</div>
+          </div>
+          ${sessionActive ? '' : `<button class="btn btn-secondary btn-sm" onclick="removeRosterMember('${m.id}')">Remove</button>`}
+        </div>
+      `;
+      }).join('')
+    : `<div class="empty small"><p>No one added yet.</p></div>`;
+
+  const attendBtn = sessionActive
+    ? `<button class="btn btn-success btn-sm" disabled>📋 Session Active</button>`
+    : `<button class="btn btn-success btn-sm" onclick="startAttendanceForActiveRoster()" ${session ? 'disabled title="Finish or cancel the active session first"' : ''}>📋 Take Attendance</button>`;
+
+  out.innerHTML = `
+    <div class="roster-detail-hdr">
+      <h2>${esc(r.name)}</h2>
+      <div>
+        ${attendBtn}
+        <button class="btn btn-primary btn-sm" onclick="openAddMemberModal()" ${sessionActive?'disabled':''}>+ Add Person</button>
+        <button class="btn btn-secondary btn-sm" onclick="deleteRosterConfirm()" ${sessionActive?'disabled':''}>Delete Roster</button>
+      </div>
+    </div>
+    <div class="roster-member-list">${rows}</div>
+  `;
+}
+
+function openAddMemberModal() {
+  setAddMemberMode('existing');
+  document.getElementById('am-search').value = '';
+  renderMemberPicker();
+  openModal('roster-add-modal');
+}
+
+function setAddMemberMode(mode) {
+  addMemberMode = mode;
+  document.getElementById('am-tab-existing').classList.toggle('active', mode === 'existing');
+  document.getElementById('am-tab-manual').classList.toggle('active', mode === 'manual');
+  document.getElementById('am-existing').style.display = mode === 'existing' ? 'block' : 'none';
+  document.getElementById('am-manual').style.display   = mode === 'manual'   ? 'block' : 'none';
+  document.getElementById('am-manual-add').style.display = mode === 'manual' ? 'inline-block' : 'none';
+}
+
+function renderMemberPicker() {
+  const q = (document.getElementById('am-search').value || '').toLowerCase().trim();
+  const already = new Set((activeRosterDetail?.members || []).filter(m => m.kind === 'roller').map(m => String(m.memberId)));
+  const matches = allMembers
+    .filter(m => !q || m.fullName.toLowerCase().includes(q) || (m.email||'').toLowerCase().includes(q))
+    .slice(0, 50);
+  const out = document.getElementById('am-picker-out');
+  if (!matches.length) {
+    out.innerHTML = `<div class="empty small"><p>No matches.</p></div>`;
+    return;
+  }
+  out.innerHTML = matches.map(m => {
+    const added = already.has(String(m.memberId));
+    return `
+      <div class="am-picker-row ${added ? 'added' : ''}">
+        <div>
+          <div class="roster-member-name">${esc(m.fullName)}</div>
+          <div class="roster-member-sub">${esc(m.email || '')}</div>
+        </div>
+        <button class="btn ${added ? 'btn-secondary' : 'btn-primary'} btn-sm" ${added ? 'disabled' : ''}
+          onclick="addExistingMember('${m.memberId}')">${added ? 'Added' : 'Add'}</button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function addExistingMember(memberId) {
+  if (!activeRosterDetail) return;
+  activeRosterDetail = await apiFetch2(`/api/rosters/${activeRosterDetail.id}/members`, 'POST', { memberId });
+  renderRosterDetail();
+  renderMemberPicker();
+  loadRosters();
+}
+
+async function submitManualMember() {
+  if (!activeRosterDetail) return;
+  const fullName = document.getElementById('am-name').value.trim();
+  if (!fullName) return;
+  const body = {
+    fullName,
+    email: document.getElementById('am-email').value.trim(),
+    phone: document.getElementById('am-phone').value.trim(),
+    notes: document.getElementById('am-notes').value.trim(),
+  };
+  activeRosterDetail = await apiFetch2(`/api/rosters/${activeRosterDetail.id}/members`, 'POST', body);
+  ['am-name','am-email','am-phone','am-notes'].forEach(id => document.getElementById(id).value = '');
+  closeModal('roster-add-modal');
+  renderRosterDetail();
+  loadRosters();
+}
+
+async function removeRosterMember(entryId) {
+  if (!activeRosterDetail) return;
+  activeRosterDetail = await apiFetch2(`/api/rosters/${activeRosterDetail.id}/members/${entryId}`, 'DELETE');
+  renderRosterDetail();
+  loadRosters();
+}
+
+async function apiFetch2(path, method, body) {
+  const res = await fetch(API() + path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(9000),
+  });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
 
 function saveConfig() {
   cfg.url  = document.getElementById('cfg-url').value.trim();

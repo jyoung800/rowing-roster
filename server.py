@@ -17,6 +17,7 @@ import os
 import re
 import json
 import time
+import uuid
 import netrc  # noqa: F401 -- pre-import before any threads exist. `requests`
               # lazily imports this on first use to check for .netrc creds
               # (which we never use); two threads racing to import it for the
@@ -253,6 +254,83 @@ def load_cache_from_disk():
         _roster_cache["built_at"]           = data.get("built_at", 0.0)
     except (OSError, ValueError, KeyError):
         pass  # corrupt/partial cache file -- just start fresh
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom rosters (coach-created, shared/open -- no login)
+#
+# Independent of the Roller sync: a coach-made roster is just a named list of
+# member entries. Each entry is either:
+#   {"kind": "roller", "id": "...", "memberId": "..."}   -- a link to a synced
+#       Roller member; display fields are resolved live so they stay current.
+#   {"kind": "manual", "id": "...", "fullName": ..., "email": ..., "phone": ...}
+#       -- someone not in Roller at all (a guest, walk-on, etc).
+# Persisted as plain JSON since it's low-volume, coach-editable data -- no
+# database needed for a handful of rosters with a few dozen members each.
+# ─────────────────────────────────────────────────────────────────────────────
+ROSTERS_FILE = os.getenv("ROSTERS_FILE", "rosters.json")
+_rosters_lock = threading.Lock()
+
+
+def _load_rosters():
+    if not os.path.exists(ROSTERS_FILE):
+        return []
+    try:
+        with open(ROSTERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("rosters", [])
+    except (OSError, ValueError):
+        return []
+
+
+def _save_rosters(rosters):
+    with open(ROSTERS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"rosters": rosters}, f, indent=2)
+
+
+def _find_synced_member(member_id: str):
+    pool = DEMO_MEMBERS_DATA if DEMO_MODE else _roster_cache["members"]
+    for m in pool:
+        if str(m.get("memberId")) == str(member_id):
+            return m
+    return None
+
+
+def _resolve_roster_entry(entry: dict) -> dict:
+    if entry.get("kind") == "manual":
+        return {
+            "id":       entry["id"],
+            "kind":     "manual",
+            "fullName": entry.get("fullName", ""),
+            "email":    entry.get("email", ""),
+            "phone":    entry.get("phone", ""),
+            "notes":    entry.get("notes", ""),
+        }
+    member = _find_synced_member(entry.get("memberId"))
+    if not member:
+        return {
+            "id": entry["id"], "kind": "roller", "memberId": entry.get("memberId"),
+            "fullName": "(no longer synced)", "email": "", "phone": "",
+            "membershipName": "", "status": "unknown",
+        }
+    return {
+        "id":             entry["id"],
+        "kind":           "roller",
+        "memberId":       member.get("memberId"),
+        "fullName":       member.get("fullName", ""),
+        "email":          member.get("email", ""),
+        "phone":          member.get("phone", ""),
+        "membershipName": member.get("membershipName", ""),
+        "status":         member.get("status", ""),
+    }
+
+
+def _resolve_roster(roster: dict) -> dict:
+    return {
+        "id":        roster["id"],
+        "name":      roster["name"],
+        "createdAt": roster.get("createdAt", ""),
+        "members":   [_resolve_roster_entry(e) for e in roster.get("members", [])],
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -722,6 +800,94 @@ def get_config():
         "mode":      "demo" if DEMO_MODE else "live",
         "pluFilter": MEMBERSHIP_PLUS,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API — custom rosters
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/rosters", methods=["GET", "POST"])
+@handle_errors
+def rosters_collection():
+    with _rosters_lock:
+        rosters = _load_rosters()
+        if request.method == "POST":
+            name = (request.get_json(silent=True) or {}).get("name", "").strip()
+            if not name:
+                return jsonify({"error": "name is required"}), 400
+            roster = {"id": "r_" + uuid.uuid4().hex[:10], "name": name,
+                       "createdAt": datetime.now(timezone.utc).isoformat(), "members": []}
+            rosters.append(roster)
+            _save_rosters(rosters)
+            return jsonify(_resolve_roster(roster)), 201
+
+        return jsonify([
+            {"id": r["id"], "name": r["name"], "createdAt": r.get("createdAt", ""), "memberCount": len(r.get("members", []))}
+            for r in rosters
+        ])
+
+
+@app.route("/api/rosters/<roster_id>", methods=["GET", "PUT", "DELETE"])
+@handle_errors
+def roster_detail(roster_id):
+    with _rosters_lock:
+        rosters = _load_rosters()
+        roster = next((r for r in rosters if r["id"] == roster_id), None)
+        if not roster:
+            return jsonify({"error": "not found"}), 404
+
+        if request.method == "DELETE":
+            rosters = [r for r in rosters if r["id"] != roster_id]
+            _save_rosters(rosters)
+            return jsonify({"deleted": roster_id})
+
+        if request.method == "PUT":
+            name = (request.get_json(silent=True) or {}).get("name", "").strip()
+            if not name:
+                return jsonify({"error": "name is required"}), 400
+            roster["name"] = name
+            _save_rosters(rosters)
+
+        return jsonify(_resolve_roster(roster))
+
+
+@app.route("/api/rosters/<roster_id>/members", methods=["POST"])
+@handle_errors
+def add_roster_member(roster_id):
+    body = request.get_json(silent=True) or {}
+    with _rosters_lock:
+        rosters = _load_rosters()
+        roster = next((r for r in rosters if r["id"] == roster_id), None)
+        if not roster:
+            return jsonify({"error": "not found"}), 404
+
+        entry_id = "e_" + uuid.uuid4().hex[:10]
+        if body.get("memberId"):
+            entry = {"id": entry_id, "kind": "roller", "memberId": str(body["memberId"])}
+        else:
+            full_name = (body.get("fullName") or "").strip()
+            if not full_name:
+                return jsonify({"error": "fullName is required for a manual entry"}), 400
+            entry = {
+                "id": entry_id, "kind": "manual", "fullName": full_name,
+                "email": body.get("email", ""), "phone": body.get("phone", ""),
+                "notes": body.get("notes", ""),
+            }
+        roster.setdefault("members", []).append(entry)
+        _save_rosters(rosters)
+        return jsonify(_resolve_roster(roster)), 201
+
+
+@app.route("/api/rosters/<roster_id>/members/<entry_id>", methods=["DELETE"])
+@handle_errors
+def remove_roster_member(roster_id, entry_id):
+    with _rosters_lock:
+        rosters = _load_rosters()
+        roster = next((r for r in rosters if r["id"] == roster_id), None)
+        if not roster:
+            return jsonify({"error": "not found"}), 404
+        roster["members"] = [e for e in roster.get("members", []) if e["id"] != entry_id]
+        _save_rosters(rosters)
+        return jsonify(_resolve_roster(roster))
 
 
 # Load any persisted cache, then warm/continue it in the background as soon
