@@ -55,7 +55,11 @@ ROLLER_DATA_API  = "https://api.roller.app"
 # back the one-time historical scan looks to catch every booking that might
 # still be currently active (e.g. a Full Year membership bought months ago).
 LOOKBACK_DAYS     = int(os.getenv("LOOKBACK_DAYS", "180"))
-CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(6 * 3600)))
+# Once a day is enough -- enrichment only re-fetches bookings that actually
+# had a status-change event on newly-scanned days (see _enrich_dirty_bookings),
+# so there's no benefit to refreshing more often than the changelog itself
+# produces new data.
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(24 * 3600)))
 
 # Persisted to disk so a restart (local dev, or a worker respawn on Render)
 # resumes from where it left off instead of re-fetching everything -- the
@@ -209,9 +213,10 @@ def resolve_status(membership_name: str, start_date_str, roller_status: str, tod
 # ─────────────────────────────────────────────────────────────────────────────
 _cache_lock = threading.Lock()
 _roster_cache = {
-    "members":          [],
+    "members_by_ticket": {},    # ticketId -> raw entry (no computed status/scheduleWindow -- that's date-dependent, computed fresh per request)
     "waivers":          [],
-    "known_booking_refs": set(),
+    "known_booking_refs": set(),  # every booking ref ever discovered (historical record)
+    "dirty_refs":        set(),   # booking refs discovered but not yet (re-)enriched
     "scanned_through":  None,   # date — last day included in the discovery scan
     "products_by_id":   {},     # productId(str) -> {"plu": str, "name": str}
     "products_loaded_at": 0.0,
@@ -226,9 +231,10 @@ def save_cache_to_disk():
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({
-                "members":            _roster_cache["members"],
+                "members_by_ticket":  _roster_cache["members_by_ticket"],
                 "waivers":            _roster_cache["waivers"],
                 "known_booking_refs": sorted(_roster_cache["known_booking_refs"]),
+                "dirty_refs":         sorted(_roster_cache["dirty_refs"]),
                 "scanned_through":    _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
                 "products_by_id":     _roster_cache["products_by_id"],
                 "products_loaded_at": _roster_cache["products_loaded_at"],
@@ -244,9 +250,10 @@ def load_cache_from_disk():
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        _roster_cache["members"]            = data.get("members", [])
+        _roster_cache["members_by_ticket"]  = data.get("members_by_ticket", {})
         _roster_cache["waivers"]             = data.get("waivers", [])
         _roster_cache["known_booking_refs"] = set(data.get("known_booking_refs", []))
+        _roster_cache["dirty_refs"]          = set(data.get("dirty_refs", []))
         scanned = data.get("scanned_through")
         _roster_cache["scanned_through"]    = date.fromisoformat(scanned) if scanned else None
         _roster_cache["products_by_id"]     = data.get("products_by_id", {})
@@ -254,6 +261,22 @@ def load_cache_from_disk():
         _roster_cache["built_at"]           = data.get("built_at", 0.0)
     except (OSError, ValueError, KeyError):
         pass  # corrupt/partial cache file -- just start fresh
+
+
+def _finalize_entry(raw: dict, today: date) -> dict:
+    """Applies the (date-dependent) semester-status override at read time,
+    rather than baking it in at enrichment time -- a member's active/inactive
+    status can flip purely because a day passed (e.g. Aug 1), with no
+    underlying Roller event at all."""
+    effective_status, window = resolve_status(
+        raw.get("membershipName"), raw.get("startDate"), raw.get("rollerStatus", ""), today
+    )
+    return {**raw, "status": effective_status, "scheduleWindow": window}
+
+
+def _live_roster(today: date | None = None) -> list:
+    today = today or datetime.now(timezone.utc).date()
+    return [_finalize_entry(raw, today) for raw in _roster_cache["members_by_ticket"].values()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,7 +311,7 @@ def _save_rosters(rosters):
 
 
 def _find_synced_member(member_id: str):
-    pool = DEMO_MEMBERS_DATA if DEMO_MODE else _roster_cache["members"]
+    pool = DEMO_MEMBERS_DATA if DEMO_MODE else _live_roster()
     for m in pool:
         if str(m.get("memberId")) == str(member_id):
             return m
@@ -416,7 +439,9 @@ def _scan_changelog_day(d: date):
         for e in events:
             ref = e.get("bookingReference")
             if ref:
-                _roster_cache["known_booking_refs"].add(str(ref))
+                ref = str(ref)
+                _roster_cache["known_booking_refs"].add(ref)
+                _roster_cache["dirty_refs"].add(ref)  # this booking changed -- needs (re-)enrichment
     except requests.RequestException:
         pass
     try:
@@ -461,7 +486,9 @@ def _split_name(full: str):
     return (parts[0], parts[1]) if len(parts) == 2 else (full, "")
 
 
-def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, ticket_customer: dict, booking_customer: dict, booking_name: str, today: date):
+def _build_raw_entry(ref: str, item: dict, ticket: dict, product: dict, ticket_customer: dict, booking_customer: dict, booking_name: str) -> dict:
+    """Raw, date-independent fields only -- active/inactive status is computed
+    fresh per-request by _finalize_entry, not baked in here."""
     ticket_cid  = str(ticket_customer.get("customerId") or "")
     booking_cid = str(booking_customer.get("customerId") or "")
     resolved_name = f"{ticket_customer.get('firstName','')} {ticket_customer.get('lastName','')}".strip()
@@ -487,9 +514,6 @@ def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, ticke
     email = ticket_customer.get("email") or booking_customer.get("email", "")
     phone = ticket_customer.get("phone") or booking_customer.get("phone", "")
 
-    effective_status, window = resolve_status(
-        product["name"], item.get("bookingDate"), ticket.get("membershipStatus", ""), today
-    )
     return {
         "memberId":       ticket_cid or booking_cid or ticket.get("ticketId", ""),
         "firstName":      first,
@@ -498,9 +522,7 @@ def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, ticke
         "email":          email,
         "phone":          phone,
         "membershipName": product["name"],
-        "status":         effective_status,
         "rollerStatus":   ticket.get("membershipStatus", ""),
-        "scheduleWindow": window,
         "startDate":      item.get("bookingDate", ""),
         "endDate":         item.get("bookingEndDate", ""),
         "plu":            product["plu"],
@@ -511,50 +533,53 @@ def _build_roster_entry(ref: str, item: dict, ticket: dict, product: dict, ticke
     }
 
 
-def _enrich_roster():
+def _enrich_dirty_bookings():
+    """Only re-fetches bookings that had a status-change event on a newly-
+    scanned day (see _scan_changelog_day), not the entire historical set --
+    the discovery scan already tells us exactly which bookings changed, so
+    there's no need to re-verify ones that didn't."""
+    if not _roster_cache["dirty_refs"]:
+        return
     load_product_catalog()
-    today = datetime.now(timezone.utc).date()
     customer_cache: dict = {}
-    roster = []
-    for ref in list(_roster_cache["known_booking_refs"]):
+
+    def fetch_customer(cid: str) -> dict:
+        if not cid:
+            return {}
+        if cid not in customer_cache:
+            try:
+                customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
+            except requests.RequestException:
+                customer_cache[cid] = {}
+        return customer_cache[cid]
+
+    for ref in list(_roster_cache["dirty_refs"]):
         try:
             booking = roller_get(f"/bookings/{ref}")
         except requests.RequestException:
-            continue
+            continue  # transient failure -- stays dirty, retried next refresh
+        _roster_cache["dirty_refs"].discard(ref)
         if not booking:
-            continue
+            continue  # 404 -- booking's gone, nothing to store
+
         booking_cid  = str(booking.get("customerId") or "")
         booking_name = booking.get("name", "")
-
-        def fetch_customer(cid: str) -> dict:
-            if not cid:
-                return {}
-            if cid not in customer_cache:
-                try:
-                    customer_cache[cid] = roller_get(f"/customers/{cid}") or {}
-                except requests.RequestException:
-                    customer_cache[cid] = {}
-            return customer_cache[cid]
-
         booking_customer = fetch_customer(booking_cid)
+
         for item in booking.get("items", []):
             pid = str(item.get("productId", ""))
             product = _roster_cache["products_by_id"].get(pid)
-            if not product:
-                continue
-            if MEMBERSHIP_PLUS and product["plu"] not in MEMBERSHIP_PLUS:
+            if not product or (MEMBERSHIP_PLUS and product["plu"] not in MEMBERSHIP_PLUS):
                 continue
             for ticket in item.get("tickets", []):
-                # Membership tickets often don't carry their own customerId,
-                # and even when they do, that profile (the actual rower --
-                # frequently a minor) may lack contact info. Resolve both the
-                # ticket's own customer and the booking's purchaser so name
-                # and contact info can be picked independently.
+                ticket_id = ticket.get("ticketId", "")
+                if not ticket_id:
+                    continue
                 ticket_cid = str(ticket.get("customerId") or "")
                 ticket_customer = fetch_customer(ticket_cid) if ticket_cid else {}
-                roster.append(_build_roster_entry(ref, item, ticket, product, ticket_customer, booking_customer, booking_name, today))
-    roster.sort(key=lambda x: (x["lastName"].lower(), x["firstName"].lower()))
-    _roster_cache["members"] = roster
+                _roster_cache["members_by_ticket"][ticket_id] = _build_raw_entry(
+                    ref, item, ticket, product, ticket_customer, booking_customer, booking_name
+                )
 
 
 def refresh_roster_cache():
@@ -564,7 +589,7 @@ def refresh_roster_cache():
         _roster_cache["refreshing"] = True
         _discover_membership_bookings()
         save_cache_to_disk()  # checkpoint the discovered bookings even if enrichment fails/is slow
-        _enrich_roster()
+        _enrich_dirty_bookings()
         _roster_cache["built_at"]   = time.time()
         _roster_cache["last_error"] = None
         save_cache_to_disk()
@@ -642,8 +667,9 @@ def health():
     cache_info = {} if DEMO_MODE else {
         "cache_built_at":  datetime.fromtimestamp(_roster_cache["built_at"], tz=timezone.utc).isoformat() if _roster_cache["built_at"] else None,
         "cache_refreshing": _roster_cache["refreshing"],
-        "cache_member_count": len(_roster_cache["members"]),
+        "cache_member_count": len(_roster_cache["members_by_ticket"]),
         "known_bookings_discovered": len(_roster_cache["known_booking_refs"]),
+        "dirty_refs_pending": len(_roster_cache["dirty_refs"]),
         "scanned_through": _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
         "rate_limit_hits": _roster_cache["rate_limit_hits"],
         "last_error":      _roster_cache["last_error"],
@@ -670,7 +696,7 @@ def refresh():
     refresh_roster_cache()
     return jsonify({
         "built_at": _roster_cache["built_at"],
-        "member_count": len(_roster_cache["members"]),
+        "member_count": len(_roster_cache["members_by_ticket"]),
         "error": _roster_cache["last_error"],
     })
 
@@ -696,7 +722,7 @@ def get_summary():
         })
 
     ensure_roster_fresh()
-    members = _roster_cache["members"]
+    members = _live_roster()
     active  = sum(1 for m in members if m["status"] == "active")
     return jsonify({
         "activeMembers":   active,
@@ -728,7 +754,7 @@ def get_members():
             roster.append(entry)
     else:
         ensure_roster_fresh()
-        roster = [dict(m) for m in _roster_cache["members"]]
+        roster = _live_roster(today)
 
     if status_filter != "all":
         roster = [m for m in roster if m["status"] == status_filter]

@@ -27,15 +27,29 @@ So this server:
 - **Discovers** every booking that's ever had a membership event by scanning
   the daily changelog across `LOOKBACK_DAYS` (default 180) days — this is the
   only step that requires per-day scanning, and only runs once as a backfill,
-  then incrementally for new days after that.
-- **Enriches** each discovered booking with a direct, un-scanned lookup to get
-  its *current* status, product, and contact info.
+  then incrementally for new days after that (one day per refresh in steady
+  state).
+- **Enriches only what changed**: the discovery scan already tells us exactly
+  which `bookingReference`s had a status-change event on a given day, so
+  refreshes only re-fetch *those* bookings (via `/bookings/{ref}` and
+  `/customers/{id}`), not the entire historical set. A booking that hasn't
+  had an event stays as-is in the cache indefinitely.
 - **Filters** to your rowing program's PLU codes (parsed from the product
   name — Roller doesn't expose PLU as its own field, it's embedded like
   `"8573|40 SIBLING | JUNIOR CREW ROWING MEMBERSHIP SPRING SEMESTER"`).
-- **Applies semester-based active status** on top of Roller's own status (see
-  below), and caches the result in memory, refreshing in the background when
-  stale.
+- **Applies semester-based active status at read time, not enrichment time**:
+  a membership's active/inactive status depends on today's date (e.g. a Full
+  Year membership flips active on Aug 1 with zero Roller-side change), so
+  it's computed fresh on every `/api/members`/`/api/summary` call from the
+  cached raw fields, rather than baked in when the booking was last enriched.
+
+**Steady-state API usage** (after the one-time backfill): roughly one
+`/data/membershipstatuses` call + one `/data/signedwaivers` call per day for
+the incremental scan, plus a handful of `/bookings`/`/customers` calls for
+whatever actually changed that day. For a small club this is on the order of
+single digits to a couple dozen calls/day — a large drop from re-enriching
+the entire roster on every refresh (which was costing hundreds of thousands
+of calls/month before this design).
 
 ---
 
