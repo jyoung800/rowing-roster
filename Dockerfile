@@ -14,6 +14,6 @@ ENV CACHE_FILE=/app/data/roster_cache.json
 ENV ROSTERS_FILE=/app/data/rosters.json
 RUN mkdir -p /app/data
 
-EXPOSE 5050
+EXPOSE 8050
 
-CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:5050", "--workers", "1", "--timeout", "120"]
+CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:8050", "--workers", "1", "--timeout", "120"]

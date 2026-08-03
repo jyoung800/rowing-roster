@@ -748,6 +748,7 @@ function renderTable() {
       <td>${waiverBadge(m)}</td>
       <td>${fmt(m.endDate)}</td>
       <td>${esc(m.phone||'—')}</td>
+      <td>${esc(m.bookingReference||'—')}</td>
     </tr>`;
   }).join('');
 
@@ -761,6 +762,7 @@ function renderTable() {
           <th ${sa('hasWaiver')}>Waiver ${arrow('hasWaiver')}</th>
           <th ${sa('endDate')}>Expires ${arrow('endDate')}</th>
           <th>Phone</th>
+          <th ${sa('bookingReference')}>Roller Booking ID ${arrow('bookingReference')}</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -785,6 +787,7 @@ function renderGrid() {
         ${m.email ? `<div class="card-row">✉️ ${esc(m.email)}</div>` : ''}
         ${m.phone ? `<div class="card-row">📞 ${esc(m.phone)}</div>`  : ''}
         ${m.endDate ? `<div class="card-row">📅 Expires ${fmt(m.endDate)}</div>` : ''}
+        ${m.bookingReference ? `<div class="card-row">🎫 Booking ${esc(m.bookingReference)}</div>` : ''}
       </div>
       <div class="card-ftr">
         <div class="card-badges">${statusBadge(m)} ${waiverBadge(m)}</div>
@@ -922,8 +925,8 @@ function redownload(i) {
 // ─────────────────────────────────────────────────────────────
 function exportCSV() {
   dlCSV([
-    ['Name','Email','Phone','Membership','Status','Waiver','Expires'],
-    ...filtered.map(m => [m.fullName, m.email, m.phone, m.membershipName, m.status, m.hasWaiver?'Yes':'No', m.endDate]),
+    ['Name','Email','Phone','Membership','Status','Waiver','Expires','Roller Booking ID'],
+    ...filtered.map(m => [m.fullName, m.email, m.phone, m.membershipName, m.status, m.hasWaiver?'Yes':'No', m.endDate, m.bookingReference]),
   ], 'rowing_roster.csv');
 }
 

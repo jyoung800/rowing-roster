@@ -4,7 +4,7 @@ services:
     container_name: rowing-roster
     restart: unless-stopped
     ports:
-      - "5050:5050"
+      - "8050:8050"
     environment:
       - ROLLER_CLIENT_ID=${ROLLER_CLIENT_ID}
       - ROLLER_CLIENT_SECRET=${ROLLER_CLIENT_SECRET}
