@@ -1,6 +1,13 @@
 # Never commit real credentials
 .env
 
+# Persisted roster cache and any exported snapshots -- contains real member PII, never commit
+roster_cache.json
+*_snapshot.json
+roster.csv
+waivers.csv
+server_local.log
+
 # Python
 __pycache__/
 *.pyc

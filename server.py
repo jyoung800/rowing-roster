@@ -1,13 +1,12 @@
 """
-Rowing Program Roster Data API — Roller relay for Power BI
-===========================================================
-A thin JSON API in front of ROLLER's Data API. It handles the OAuth2
-client-credentials flow (painful to reimplement in Power Query/M) and
-exposes clean JSON endpoints that Power BI's Web connector can read
-directly, with no auth logic needed on the Power BI side.
+Rowing Program Roster Dashboard — Roller relay + web UI
+========================================================
+A Flask app that serves both the JSON API (talks to Roller's Data API,
+handling the OAuth2 client-credentials flow) and dashboard.html (the coach-
+facing roster/waivers UI), from the same origin.
 
-LOCAL:  python server.py  →  http://localhost:5050/api/members
-CLOUD:  Deployed on Render (see README).
+LOCAL / NAS:  python server.py  →  http://localhost:5050
+CLOUD:        Deployed on Render (see README).
 
 Endpoints: /api/members, /api/waivers, /api/summary, /api/health
 
@@ -16,6 +15,7 @@ Dependencies: pip install flask flask-cors requests python-dotenv gunicorn
 
 import os
 import re
+import json
 import time
 import netrc  # noqa: F401 -- pre-import before any threads exist. `requests`
               # lazily imports this on first use to check for .netrc creds
@@ -25,7 +25,7 @@ import threading
 import requests
 from datetime import datetime, timezone, date, timedelta
 from functools import wraps
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -55,6 +55,13 @@ ROLLER_DATA_API  = "https://api.roller.app"
 # still be currently active (e.g. a Full Year membership bought months ago).
 LOOKBACK_DAYS     = int(os.getenv("LOOKBACK_DAYS", "180"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(6 * 3600)))
+
+# Persisted to disk so a restart (local dev, or a worker respawn on Render)
+# resumes from where it left off instead of re-fetching everything -- the
+# backfill is thousands of Roller API calls, expensive to redo from zero.
+# Note: on Render's free tier this file does NOT survive a fresh deploy (the
+# filesystem resets), only in-place restarts within the same deploy.
+CACHE_FILE = os.getenv("CACHE_FILE", "roster_cache.json")
 
 # Membership statuses (from Roller's docs, plus our own "active" demo-data
 # convention) that count as "currently active" when a membership's name has
@@ -182,6 +189,73 @@ def resolve_status(membership_name: str, start_date_str, roller_status: str, tod
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Roster cache (live mode)
+#
+# Roller's Data API has no "give me current members" endpoint — the only
+# membership-related data it exposes is a per-day changelog. So the pipeline
+# is:
+#   1. DISCOVER — scan /data/membershipstatuses?date=X and /data/signedwaivers
+#      ?date=X across LOOKBACK_DAYS days to find every bookingReference that's
+#      ever had a membership event, and every signed waiver.
+#   2. ENRICH — for each discovered booking, call /bookings/{ref} directly
+#      (no date needed) to get the LIVE current status, ticket holder, product,
+#      and expiry — then /customers/{id} for contact info.
+#   3. FILTER — keep only tickets whose product matches one of our PLUs (PLU
+#      is parsed from the product name, e.g. "8573|40 ... SPRING SEMESTER").
+# This is too slow to run per-request, so results are cached in memory (and
+# persisted to disk -- see CACHE_FILE) and refreshed in the background when
+# stale, so a restart doesn't have to redo the whole backfill from zero.
+# ─────────────────────────────────────────────────────────────────────────────
+_cache_lock = threading.Lock()
+_roster_cache = {
+    "members":          [],
+    "waivers":          [],
+    "known_booking_refs": set(),
+    "scanned_through":  None,   # date — last day included in the discovery scan
+    "products_by_id":   {},     # productId(str) -> {"plu": str, "name": str}
+    "products_loaded_at": 0.0,
+    "built_at":          0.0,
+    "refreshing":        False,
+    "last_error":        None,
+    "rate_limit_hits":   0,
+}
+
+
+def save_cache_to_disk():
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "members":            _roster_cache["members"],
+                "waivers":            _roster_cache["waivers"],
+                "known_booking_refs": sorted(_roster_cache["known_booking_refs"]),
+                "scanned_through":    _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
+                "products_by_id":     _roster_cache["products_by_id"],
+                "products_loaded_at": _roster_cache["products_loaded_at"],
+                "built_at":           _roster_cache["built_at"],
+            }, f)
+    except OSError:
+        pass  # persistence is a nice-to-have; never let it break a refresh
+
+
+def load_cache_from_disk():
+    if not os.path.exists(CACHE_FILE):
+        return
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        _roster_cache["members"]            = data.get("members", [])
+        _roster_cache["waivers"]             = data.get("waivers", [])
+        _roster_cache["known_booking_refs"] = set(data.get("known_booking_refs", []))
+        scanned = data.get("scanned_through")
+        _roster_cache["scanned_through"]    = date.fromisoformat(scanned) if scanned else None
+        _roster_cache["products_by_id"]     = data.get("products_by_id", {})
+        _roster_cache["products_loaded_at"] = data.get("products_loaded_at", 0.0)
+        _roster_cache["built_at"]           = data.get("built_at", 0.0)
+    except (OSError, ValueError, KeyError):
+        pass  # corrupt/partial cache file -- just start fresh
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Token cache (live mode only)
 # ─────────────────────────────────────────────────────────────────────────────
 _token_cache: dict = {"token": None, "expires_at": 0.0}
@@ -203,10 +277,11 @@ def get_access_token() -> str:
 
 
 def roller_get(path: str, params: dict | None = None, timeout: int = 15):
-    """GET against api.roller.app with auto token-refresh on 401. Returns
-    parsed JSON (dict or list, depending on the endpoint) or None on 404."""
+    """GET against api.roller.app with auto token-refresh on 401, retries with
+    backoff on 429. Returns parsed JSON (dict or list) or None on 404."""
     token = get_access_token()
-    for attempt in range(2):
+    attempt = 0
+    while True:
         resp = requests.get(
             f"{ROLLER_DATA_API}{path}",
             headers={"Authorization": f"Bearer {token}"},
@@ -216,43 +291,18 @@ def roller_get(path: str, params: dict | None = None, timeout: int = 15):
         if resp.status_code == 401 and attempt == 0:
             _token_cache["token"] = None
             token = get_access_token()
+            attempt += 1
             continue
         if resp.status_code == 404:
             return None
+        if resp.status_code == 429 and attempt < 4:
+            wait = float(resp.headers.get("Retry-After", 2 ** attempt))
+            _roster_cache["rate_limit_hits"] += 1
+            time.sleep(wait)
+            attempt += 1
+            continue
         resp.raise_for_status()
         return resp.json()
-    return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Roster cache (live mode)
-#
-# Roller's Data API has no "give me current members" endpoint — the only
-# membership-related data it exposes is a per-day changelog. So the pipeline
-# is:
-#   1. DISCOVER — scan /data/membershipstatuses?date=X and /data/signedwaivers
-#      ?date=X across LOOKBACK_DAYS days to find every bookingReference that's
-#      ever had a membership event, and every signed waiver.
-#   2. ENRICH — for each discovered booking, call /bookings/{ref} directly
-#      (no date needed) to get the LIVE current status, ticket holder, product,
-#      and expiry — then /customers/{id} for contact info.
-#   3. FILTER — keep only tickets whose product matches one of our PLUs (PLU
-#      is parsed from the product name, e.g. "8573|40 ... SPRING SEMESTER").
-# This is too slow to run per-request, so results are cached in memory and
-# refreshed in the background when stale.
-# ─────────────────────────────────────────────────────────────────────────────
-_cache_lock = threading.Lock()
-_roster_cache = {
-    "members":          [],
-    "waivers":          [],
-    "known_booking_refs": set(),
-    "scanned_through":  None,   # date — last day included in the discovery scan
-    "products_by_id":   {},     # productId(str) -> {"plu": str, "name": str}
-    "products_loaded_at": 0.0,
-    "built_at":          0.0,
-    "refreshing":        False,
-    "last_error":        None,
-}
 
 
 def load_product_catalog(force: bool = False):
@@ -435,11 +485,14 @@ def refresh_roster_cache():
     try:
         _roster_cache["refreshing"] = True
         _discover_membership_bookings()
+        save_cache_to_disk()  # checkpoint the discovered bookings even if enrichment fails/is slow
         _enrich_roster()
         _roster_cache["built_at"]   = time.time()
         _roster_cache["last_error"] = None
+        save_cache_to_disk()
     except Exception as e:
         _roster_cache["last_error"] = str(e)
+        save_cache_to_disk()
     finally:
         _roster_cache["refreshing"] = False
         _cache_lock.release()
@@ -496,6 +549,14 @@ def handle_errors(f):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Dashboard UI
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return send_file("dashboard.html")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # API — health
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/health")
@@ -506,6 +567,7 @@ def health():
         "cache_member_count": len(_roster_cache["members"]),
         "known_bookings_discovered": len(_roster_cache["known_booking_refs"]),
         "scanned_through": _roster_cache["scanned_through"].isoformat() if _roster_cache["scanned_through"] else None,
+        "rate_limit_hits": _roster_cache["rate_limit_hits"],
         "last_error":      _roster_cache["last_error"],
     }
     return jsonify({
@@ -662,9 +724,11 @@ def get_config():
     })
 
 
-# Warm the cache in the background as soon as the process starts (works under
-# both `python server.py` and gunicorn, since this runs at import time).
+# Load any persisted cache, then warm/continue it in the background as soon
+# as the process starts (works under both `python server.py` and gunicorn,
+# since this runs at import time).
 if not DEMO_MODE:
+    load_cache_from_disk()
     threading.Thread(target=refresh_roster_cache, daemon=True).start()
 
 
