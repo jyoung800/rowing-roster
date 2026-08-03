@@ -426,14 +426,18 @@ def load_product_catalog(force: bool = False):
     _roster_cache["products_loaded_at"] = time.time()
 
 
-def _scan_changelog_day(d: date):
-    """One day of both changelogs. Tolerates a single bad day (network hiccup,
-    transient error) so it doesn't stall the whole backfill.
+def _scan_changelog_day(d: date) -> bool:
+    """One day of both changelogs. Returns True only if BOTH calls actually
+    succeeded -- a single transient failure (network hiccup) shouldn't stall
+    the whole backfill, but it also must not be silently treated as "scanned,
+    zero events", or a persistent failure (e.g. bad credentials) would look
+    identical to a genuinely quiet day and never get retried or reported.
 
     /data/membershipstatuses takes a single `date` and returns a bare array.
     /data/signedwaivers takes a `startDate`/`endDate` 1-day span and returns
     a paginated {"items": [...], "totalPages": N} wrapper — two different
     conventions on the same API, confirmed against the live account."""
+    ok = True
     try:
         events = roller_get("/data/membershipstatuses", {"date": d.isoformat()}) or []
         for e in events:
@@ -442,8 +446,9 @@ def _scan_changelog_day(d: date):
                 ref = str(ref)
                 _roster_cache["known_booking_refs"].add(ref)
                 _roster_cache["dirty_refs"].add(ref)  # this booking changed -- needs (re-)enrichment
-    except requests.RequestException:
-        pass
+    except requests.RequestException as e:
+        _roster_cache["last_error"] = f"membershipstatuses {d.isoformat()}: {e}"
+        ok = False
     try:
         next_day = d + timedelta(days=1)
         page = 1
@@ -456,8 +461,10 @@ def _scan_changelog_day(d: date):
             if page >= resp.get("totalPages", 0):
                 break
             page += 1
-    except requests.RequestException:
-        pass
+    except requests.RequestException as e:
+        _roster_cache["last_error"] = f"signedwaivers {d.isoformat()}: {e}"
+        ok = False
+    return ok
 
 
 def _discover_membership_bookings():
@@ -467,11 +474,22 @@ def _discover_membership_bookings():
     if scanned_through is not None and start_day > today:
         return  # already fully scanned through today
     d = start_day
+    consecutive_failures = 0
     while d <= today:
-        _scan_changelog_day(d)
-        # Checkpoint after every day so a slow/interrupted backfill doesn't
-        # have to restart from scratch, and progress is visible in /api/health.
-        _roster_cache["scanned_through"] = d
+        if _scan_changelog_day(d):
+            # Checkpoint only on success -- a failed day stays un-scanned so
+            # it's retried next refresh, instead of silently being treated
+            # as "checked, zero events" (which is indistinguishable from a
+            # persistent failure like bad credentials unless we track this).
+            _roster_cache["scanned_through"] = d
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                # Something's persistently broken (bad credentials, API
+                # outage) -- stop instead of burning through the entire
+                # lookback window failing on every single day.
+                break
         d += timedelta(days=1)
 
 
